@@ -8,55 +8,21 @@ func (m *Model) cycleFocus(forward bool) {
 	switch m.focus {
 	case focusFile:
 		if forward {
-			if len(m.requestItems) > 0 {
-				m.setFocus(focusRequests)
-			} else if len(m.workflowItems) > 0 {
-				m.setFocus(focusWorkflows)
-			} else {
-				m.setFocus(focusEditor)
-			}
-		} else {
-			m.setFocus(focusResponse)
-		}
-	case focusRequests:
-		if forward {
-			if len(m.workflowItems) > 0 {
-				m.setFocus(focusWorkflows)
-			} else {
-				m.setFocus(focusEditor)
-			}
-		} else {
-			m.setFocus(focusFile)
-		}
-	case focusWorkflows:
-		if forward {
 			m.setFocus(focusEditor)
 		} else {
-			if len(m.requestItems) > 0 {
-				m.setFocus(focusRequests)
-			} else {
-				m.setFocus(focusFile)
-			}
+			m.setFocus(focusResponse)
 		}
 	case focusEditor:
 		if forward {
 			m.setFocus(focusResponse)
 		} else {
-			if len(m.workflowItems) > 0 {
-				m.setFocus(focusWorkflows)
-			} else {
-				m.setFocus(focusRequests)
-			}
+			m.setFocus(focusFile)
 		}
 	case focusResponse:
 		if forward {
 			m.setFocus(focusFile)
 		} else {
-			if len(m.workflowItems) > 0 {
-				m.setFocus(focusWorkflows)
-			} else {
-				m.setFocus(focusEditor)
-			}
+			m.setFocus(focusEditor)
 		}
 	}
 }
@@ -69,15 +35,6 @@ func (m *Model) setFocus(target paneFocus) {
 	m.focus = target
 	if target != focusResponse {
 		m.responsePaneChord = false
-	}
-
-	switch target {
-	case focusFile:
-		m.activeSidebarTab = sidebarTabFiles
-	case focusRequests:
-		m.activeSidebarTab = sidebarTabRequests
-	case focusWorkflows:
-		m.activeSidebarTab = sidebarTabWorkflows
 	}
 
 	if target == focusEditor {

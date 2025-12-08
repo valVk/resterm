@@ -34,6 +34,7 @@ func listDelegateForTheme(th theme.Theme, showDescription bool, height int) list
 	if showDescription && height > 0 {
 		delegate.SetHeight(height)
 	}
+	delegate.SetSpacing(0)
 	delegate.Styles = listItemStylesForTheme(th)
 	return delegate
 }
@@ -44,7 +45,7 @@ func applyListTheme(th theme.Theme, model *list.Model, showDescription bool, hei
 }
 
 func (m *Model) applyThemeToLists() {
-	applyListTheme(m.theme, &m.fileList, false, 0)
+	applyListTheme(m.theme, &m.fileList, true, 1)
 	applyListTheme(m.theme, &m.requestList, true, 2)
 	applyListTheme(m.theme, &m.workflowList, true, 2)
 	applyListTheme(m.theme, &m.historyList, true, 3)

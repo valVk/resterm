@@ -122,7 +122,9 @@ func (m *Model) submitNewFile() tea.Cmd {
 			return statusMsg{text: fmt.Sprintf("workspace error: %v", err), level: statusError}
 		}
 	}
-	m.fileList.SetItems(makeFileItems(entries))
+	m.fileTree = newFileTree(m.workspaceRoot)
+	m.fileTree.buildFromFiles(entries, m.workspaceRoot)
+	m.refreshFileTree()
 	m.selectFileByPath(finalPath)
 	m.setFocus(focusEditor)
 	cmd := m.openFile(finalPath)

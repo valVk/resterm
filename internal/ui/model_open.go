@@ -104,7 +104,9 @@ func (m *Model) applyOpenDirectory(dir string) tea.Cmd {
 			return statusMsg{text: fmt.Sprintf("workspace error: %v", err), level: statusError}
 		}
 	}
-	m.fileList.SetItems(makeFileItems(entries))
+	m.fileTree = newFileTree(dir)
+	m.fileTree.buildFromFiles(entries, dir)
+	m.refreshFileTree()
 	if len(entries) > 0 {
 		m.fileList.Select(0)
 	} else {
@@ -129,7 +131,9 @@ func (m *Model) applyOpenFilePath(path string) tea.Cmd {
 			return statusMsg{text: fmt.Sprintf("workspace error: %v", err), level: statusError}
 		}
 	}
-	m.fileList.SetItems(makeFileItems(entries))
+	m.fileTree = newFileTree(dir)
+	m.fileTree.buildFromFiles(entries, dir)
+	m.refreshFileTree()
 	m.selectFileByPath(path)
 	m.setFocus(focusEditor)
 	return m.openFile(path)

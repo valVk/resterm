@@ -313,9 +313,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.suppressListKey {
 				m.suppressListKey = false
 			} else {
-				var fileCmd tea.Cmd
-				m.fileList, fileCmd = m.fileList.Update(msg)
-				cmds = append(cmds, fileCmd)
+				if keyMsg, ok := msg.(tea.KeyMsg); ok {
+					keyStr := keyMsg.String()
+					if keyStr == "left" || keyStr == "h" || keyStr == "right" || keyStr == "l" {
+						// Don't pass left/right/h/l to the list - we handle these for tree navigation
+					} else {
+						var fileCmd tea.Cmd
+						m.fileList, fileCmd = m.fileList.Update(msg)
+						cmds = append(cmds, fileCmd)
+					}
+				} else {
+					var fileCmd tea.Cmd
+					m.fileList, fileCmd = m.fileList.Update(msg)
+					cmds = append(cmds, fileCmd)
+				}
 			}
 		case focusRequests:
 			if m.suppressListKey {
@@ -896,37 +907,12 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 		}
 	}
 
-	if m.focus == focusFile || m.focus == focusRequests || m.focus == focusWorkflows {
-		switch keyStr {
-		case "left", "ctrl+h", "h":
-			return combine(m.activatePrevSidebarTab())
-		case "right", "ctrl+l", "l":
-			return combine(m.activateNextSidebarTab())
-		}
-	}
-
 	if m.focus == focusFile {
 		switch keyStr {
-		case "enter":
-			return combine(m.openSelectedFile())
-		}
-	}
-
-	if m.focus == focusRequests {
-		switch {
-		case keyStr == "enter":
-			return combine(m.sendRequestFromList(true))
-		case isSpaceKey(msg):
-			return combine(m.sendRequestFromList(false))
-		}
-	}
-
-	if m.focus == focusWorkflows {
-		switch {
-		case keyStr == "enter":
-			return combine(m.runSelectedWorkflow())
-		case isSpaceKey(msg):
-			return combine(m.runSelectedWorkflow())
+		case "left", "h":
+			return combine(m.collapseOrCloseTreeNode())
+		case "right", "l", "enter":
+			return combine(m.expandOrOpenTreeNode())
 		}
 	}
 

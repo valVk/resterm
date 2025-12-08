@@ -279,149 +279,18 @@ func (m *Model) applyLayout() tea.Cmd {
 		m.sidebarWidth = realSidebarRatio
 	}
 
+	// Since we removed tabs and use tree navigation, file list gets full height
+	// Legacy split calculation for request/workflow lists (kept for compatibility)
 	hasWorkflow := len(m.workflowItems) > 0
-	fileBorder := 0
-	requestsBorder := 0
-	workflowBorder := 0
-	switch m.focus {
-	case focusFile:
-		fileBorder = sidebarFocusPad
-	case focusRequests:
-		requestsBorder = sidebarFocusPad
-	case focusWorkflows:
-		if hasWorkflow {
-			workflowBorder = sidebarFocusPad
-		}
+	requestHeight := paneHeight / 2
+	workflowHeight := paneHeight / 2
+	if !hasWorkflow {
+		requestHeight = paneHeight
+		workflowHeight = 0
 	}
 
-	padding := sidebarSplitPadding
-	if hasWorkflow {
-		padding++
-	}
-
-	borderExtra := fileBorder + requestsBorder + workflowBorder
-	available := paneHeight - padding - borderExtra
-	if available < 0 {
-		available = 0
-	}
-
-	filesBase := int(math.Round(float64(available) * m.sidebarSplit))
-	if filesBase < 0 {
-		filesBase = 0
-	}
-
-	minRequestsBase := minSidebarRequests
-	if hasWorkflow {
-		minRequestsBase = minSidebarRequests * 2
-	}
-	if minRequestsBase > available {
-		minRequestsBase = available
-	}
-	maxFilesBase := available - minRequestsBase
-	if maxFilesBase < 0 {
-		maxFilesBase = 0
-	}
-
-	minFilesBase := minSidebarFiles
-	if minFilesBase > available {
-		minFilesBase = available
-	}
-	if minFilesBase > maxFilesBase {
-		minFilesBase = maxFilesBase
-	}
-	if filesBase < minFilesBase {
-		filesBase = minFilesBase
-	}
-	if filesBase > maxFilesBase {
-		filesBase = maxFilesBase
-	}
-
-	requestsBase := available - filesBase
-	if requestsBase < minRequestsBase {
-		desired := minRequestsBase
-		if desired > available {
-			desired = available
-		}
-		requestsBase = desired
-		filesBase = available - requestsBase
-		if filesBase < 0 {
-			filesBase = 0
-		}
-	}
-
-	restRequests := requestsBase
-	workflowBase := 0
-	requestBase := restRequests
-	if hasWorkflow {
-		if m.workflowSplit <= 0 {
-			m.workflowSplit = workflowSplitDefault
-		}
-		if m.workflowSplit < minWorkflowSplit {
-			m.workflowSplit = minWorkflowSplit
-		}
-		if m.workflowSplit > maxWorkflowSplit {
-			m.workflowSplit = maxWorkflowSplit
-		}
-
-		available := restRequests
-		minPrimary := minSidebarRequests
-		minWorkflow := minSidebarRequests
-		if available < minPrimary+minWorkflow {
-			requestBase = minInt(available, minPrimary)
-			workflowBase = available - requestBase
-			if workflowBase < 0 {
-				workflowBase = 0
-			}
-		} else {
-			desiredWorkflow := int(math.Round(float64(available) * (1 - m.workflowSplit)))
-			if desiredWorkflow < minWorkflow {
-				desiredWorkflow = minWorkflow
-			}
-			if desiredWorkflow > available-minPrimary {
-				desiredWorkflow = available - minPrimary
-			}
-			if desiredWorkflow < 0 {
-				desiredWorkflow = 0
-			}
-			workflowBase = desiredWorkflow
-			requestBase = available - workflowBase
-		}
-
-		total := requestBase + workflowBase
-		if total > 0 {
-			ratio := float64(requestBase) / float64(total)
-			if ratio < minWorkflowSplit {
-				ratio = minWorkflowSplit
-			}
-			if ratio > maxWorkflowSplit {
-				ratio = maxWorkflowSplit
-			}
-			m.workflowSplit = ratio
-		}
-	} else {
-		workflowBase = 0
-	}
-	requestsBase = requestBase + workflowBase
-
-	filesHeight := filesBase + fileBorder
-	requestHeight := requestBase + requestsBorder
-	workflowHeight := workflowBase + workflowBorder
-	combinedRequestsHeight := requestHeight + workflowHeight
-
-	m.sidebarFilesHeight = filesHeight
-	m.sidebarRequestsHeight = combinedRequestsHeight
-
-	baseTotal := filesBase + requestsBase
-	if baseTotal > 0 {
-		ratio := float64(filesBase) / float64(baseTotal)
-		if ratio < minSidebarSplit {
-			ratio = minSidebarSplit
-		}
-		if ratio > maxSidebarSplit {
-			ratio = maxSidebarSplit
-		}
-		m.sidebarSplit = ratio
-	}
+	m.sidebarFilesHeight = paneHeight
+	m.sidebarRequestsHeight = requestHeight + workflowHeight
 
 	if m.mainSplitOrientation == mainSplitVertical && remaining > 0 &&
 		!m.collapseState(paneRegionEditor) &&
@@ -436,15 +305,11 @@ func (m *Model) applyLayout() tea.Cmd {
 		m.editorSplit = realEditorRatio
 	}
 
-	const sidebarTabsHeight = 2
-	fullListHeight := paneHeight - sidebarTabsHeight
-	if fullListHeight < 0 {
-		fullListHeight = 0
-	}
-
-	m.fileList.SetSize(maxInt(fileWidth-4, 0), fullListHeight)
-	m.requestList.SetSize(maxInt(fileWidth-4, 0), fullListHeight)
-	m.workflowList.SetSize(maxInt(fileWidth-4, 0), fullListHeight)
+	// File tree now contains everything (files + requests), so give it full height
+	m.fileList.SetSize(maxInt(fileWidth-4, 0), paneHeight)
+	// Request and workflow lists are no longer used with tree navigation
+	m.requestList.SetSize(maxInt(fileWidth-4, 0), requestHeight)
+	m.workflowList.SetSize(maxInt(fileWidth-4, 0), workflowHeight)
 	m.editor.SetWidth(maxInt(editorWidth-4, 1))
 	m.editor.SetHeight(maxInt(editorHeight, 1))
 

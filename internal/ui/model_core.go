@@ -58,14 +58,6 @@ const (
 	responseTabHistory
 )
 
-type sidebarTab int
-
-const (
-	sidebarTabFiles sidebarTab = iota
-	sidebarTabRequests
-	sidebarTabWorkflows
-)
-
 type responseSplitOrientation int
 
 const (
@@ -198,6 +190,7 @@ type Model struct {
 	workspaceRoot      string
 	workspaceRecursive bool
 
+	fileTree                 *fileTree
 	fileList                 list.Model
 	requestList              list.Model
 	workflowList             list.Model
@@ -208,7 +201,6 @@ type Model struct {
 	responseSplitOrientation responseSplitOrientation
 	responsePaneFocus        responsePaneID
 	responsePaneChord        bool
-	activeSidebarTab         sidebarTab
 	sidebarCollapsed         bool
 	editorCollapsed          bool
 	responseCollapsed        bool
@@ -399,18 +391,22 @@ func New(cfg Config) Model {
 		}
 	}
 
-	items := makeFileItems(entries)
-	fileList := list.New(items, listDelegateForTheme(th, false, 0), 0, 0)
+	tree := newFileTree(workspace)
+	tree.buildFromFiles(entries, workspace)
+	treeNodes := tree.flatten()
+	treeItems := makeTreeItems(treeNodes)
+
+	fileList := list.New(treeItems, listDelegateForTheme(th, true, 1), 0, 0)
 	fileList.Title = "Files"
 	fileList.SetShowStatusBar(false)
-	fileList.SetShowPagination(false)
 	fileList.SetShowHelp(false)
 	fileList.SetFilteringEnabled(true)
 	fileList.SetShowTitle(false)
+	fileList.SetShowPagination(true) // Explicitly enable pagination
 	fileList.DisableQuitKeybindings()
 	if cfg.FilePath != "" {
-		for i, entry := range entries {
-			if filepath.Clean(entry.Path) == filepath.Clean(cfg.FilePath) {
+		for i, node := range treeNodes {
+			if node.nodeType == treeNodeFile && filepath.Clean(node.path) == filepath.Clean(cfg.FilePath) {
 				fileList.Select(i)
 				break
 			}
@@ -456,7 +452,6 @@ func New(cfg Config) Model {
 	requestList := list.New(nil, reqDelegate, 0, 0)
 	requestList.Title = "Requests"
 	requestList.SetShowStatusBar(false)
-	requestList.SetShowPagination(false)
 	requestList.SetShowHelp(false)
 	requestList.SetFilteringEnabled(true)
 	requestList.SetShowTitle(false)
@@ -466,7 +461,6 @@ func New(cfg Config) Model {
 	workflowList := list.New(nil, workflowDelegate, 0, 0)
 	workflowList.Title = "Workflows"
 	workflowList.SetShowStatusBar(false)
-	workflowList.SetShowPagination(false)
 	workflowList.SetShowHelp(false)
 	workflowList.SetFilteringEnabled(true)
 	workflowList.SetShowTitle(false)
@@ -537,6 +531,7 @@ func New(cfg Config) Model {
 		sshGlobals:             sshGlobals,
 		workspaceRoot:          workspace,
 		workspaceRecursive:     cfg.Recursive,
+		fileTree:               tree,
 		fileList:               fileList,
 		requestList:            requestList,
 		workflowList:           workflowList,
@@ -559,7 +554,6 @@ func New(cfg Config) Model {
 		responseTokens:           make(map[string]*responseSnapshot),
 		responseLastFocused:      responsePanePrimary,
 		focus:                    focusFile,
-		activeSidebarTab:         sidebarTabFiles,
 		sidebarWidth:             sidebarWidthDefault,
 		sidebarSplit:             sidebarSplitDefault,
 		workflowSplit:            workflowSplitDefault,

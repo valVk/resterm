@@ -17,10 +17,7 @@ func (m *Model) openSelectedFile() tea.Cmd {
 	if path == "" {
 		return nil
 	}
-	cmd := m.openFile(path)
-	m.activeSidebarTab = sidebarTabRequests
-	m.setFocus(focusRequests)
-	return cmd
+	return m.openFile(path)
 }
 
 func (m *Model) openFile(path string) tea.Cmd {
@@ -112,7 +109,9 @@ func (m *Model) reloadWorkspace() tea.Cmd {
 			return statusMsg{text: fmt.Sprintf("workspace error: %v", err), level: statusError}
 		}
 	}
-	m.fileList.SetItems(makeFileItems(entries))
+	m.fileTree = newFileTree(m.workspaceRoot)
+	m.fileTree.buildFromFiles(entries, m.workspaceRoot)
+	m.refreshFileTree()
 	return func() tea.Msg {
 		return statusMsg{text: "Workspace refreshed", level: statusSuccess}
 	}
@@ -121,6 +120,12 @@ func (m *Model) reloadWorkspace() tea.Cmd {
 func (m *Model) selectFileByPath(path string) bool {
 	items := m.fileList.Items()
 	for i, item := range items {
+		if ti, ok := item.(treeItem); ok {
+			if ti.node.nodeType == treeNodeFile && filepath.Clean(ti.node.path) == filepath.Clean(path) {
+				m.fileList.Select(i)
+				return true
+			}
+		}
 		if fi, ok := item.(fileItem); ok {
 			if filepath.Clean(fi.entry.Path) == filepath.Clean(path) {
 				m.fileList.Select(i)
