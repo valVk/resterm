@@ -896,6 +896,15 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 		}
 	}
 
+	if m.focus == focusFile || m.focus == focusRequests || m.focus == focusWorkflows {
+		switch keyStr {
+		case "left", "ctrl+h", "h":
+			return combine(m.activatePrevSidebarTab())
+		case "right", "ctrl+l", "l":
+			return combine(m.activateNextSidebarTab())
+		}
+	}
+
 	if m.focus == focusFile {
 		switch keyStr {
 		case "enter":

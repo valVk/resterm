@@ -18,6 +18,7 @@ func (m *Model) openSelectedFile() tea.Cmd {
 		return nil
 	}
 	cmd := m.openFile(path)
+	m.activeSidebarTab = sidebarTabRequests
 	m.setFocus(focusRequests)
 	return cmd
 }

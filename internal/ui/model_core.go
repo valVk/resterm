@@ -58,6 +58,14 @@ const (
 	responseTabHistory
 )
 
+type sidebarTab int
+
+const (
+	sidebarTabFiles sidebarTab = iota
+	sidebarTabRequests
+	sidebarTabWorkflows
+)
+
 type responseSplitOrientation int
 
 const (
@@ -110,9 +118,9 @@ const (
 	sidebarWorkflowSplit = 1.0 / 3.0
 	minSidebarFiles      = 6
 	minSidebarRequests   = 4
-	sidebarSplitPadding  = 1
+	sidebarSplitPadding  = 0
 	sidebarChrome        = 2
-	sidebarFocusPad      = 2
+	sidebarFocusPad      = 0
 )
 
 const (
@@ -200,6 +208,7 @@ type Model struct {
 	responseSplitOrientation responseSplitOrientation
 	responsePaneFocus        responsePaneID
 	responsePaneChord        bool
+	activeSidebarTab         sidebarTab
 	sidebarCollapsed         bool
 	editorCollapsed          bool
 	responseCollapsed        bool
@@ -394,6 +403,7 @@ func New(cfg Config) Model {
 	fileList := list.New(items, listDelegateForTheme(th, false, 0), 0, 0)
 	fileList.Title = "Files"
 	fileList.SetShowStatusBar(false)
+	fileList.SetShowPagination(false)
 	fileList.SetShowHelp(false)
 	fileList.SetFilteringEnabled(true)
 	fileList.SetShowTitle(false)
@@ -442,19 +452,21 @@ func New(cfg Config) Model {
 	secondaryViewport := viewport.New(0, 0)
 	secondaryViewport.SetContent(centerContent(noResponseMessage, 0, 0))
 
-	reqDelegate := listDelegateForTheme(th, true, 3)
+	reqDelegate := listDelegateForTheme(th, true, 2)
 	requestList := list.New(nil, reqDelegate, 0, 0)
 	requestList.Title = "Requests"
 	requestList.SetShowStatusBar(false)
+	requestList.SetShowPagination(false)
 	requestList.SetShowHelp(false)
 	requestList.SetFilteringEnabled(true)
 	requestList.SetShowTitle(false)
 	requestList.DisableQuitKeybindings()
 
-	workflowDelegate := listDelegateForTheme(th, true, 3)
+	workflowDelegate := listDelegateForTheme(th, true, 2)
 	workflowList := list.New(nil, workflowDelegate, 0, 0)
 	workflowList.Title = "Workflows"
 	workflowList.SetShowStatusBar(false)
+	workflowList.SetShowPagination(false)
 	workflowList.SetShowHelp(false)
 	workflowList.SetFilteringEnabled(true)
 	workflowList.SetShowTitle(false)
@@ -547,6 +559,7 @@ func New(cfg Config) Model {
 		responseTokens:           make(map[string]*responseSnapshot),
 		responseLastFocused:      responsePanePrimary,
 		focus:                    focusFile,
+		activeSidebarTab:         sidebarTabFiles,
 		sidebarWidth:             sidebarWidthDefault,
 		sidebarSplit:             sidebarSplitDefault,
 		workflowSplit:            workflowSplitDefault,

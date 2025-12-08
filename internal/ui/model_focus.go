@@ -70,6 +70,16 @@ func (m *Model) setFocus(target paneFocus) {
 	if target != focusResponse {
 		m.responsePaneChord = false
 	}
+
+	switch target {
+	case focusFile:
+		m.activeSidebarTab = sidebarTabFiles
+	case focusRequests:
+		m.activeSidebarTab = sidebarTabRequests
+	case focusWorkflows:
+		m.activeSidebarTab = sidebarTabWorkflows
+	}
+
 	if target == focusEditor {
 		if m.editorInsertMode {
 			m.editor.Cursor.SetMode(cursor.CursorBlink)

@@ -218,147 +218,133 @@ func (m Model) renderFilePane() string {
 		return m.renderCollapsedPane(style, width, height, "Sidebar", "g1", zoomHidden, paneActive)
 	}
 	innerWidth := maxInt(1, width-4)
-	titleBase := m.theme.PaneTitle.Width(innerWidth).Align(lipgloss.Center)
-	filesTitle := titleBase.Render(strings.ToUpper("Files"))
-	requestsTitle := titleBase.Render(strings.ToUpper("Requests"))
-	workflowsTitle := titleBase.Render(strings.ToUpper("Workflows"))
-	if m.focus == focusFile {
-		filesTitle = m.theme.PaneTitleFile.
-			Width(innerWidth).
-			Align(lipgloss.Center).
-			Foreground(m.theme.PaneActiveForeground).
-			Render(strings.ToUpper("Files"))
-	}
-	if m.focus == focusRequests {
-		requestsTitle = m.theme.PaneTitleRequests.
-			Width(innerWidth).
-			Align(lipgloss.Center).
-			Foreground(m.theme.PaneActiveForeground).
-			Render(strings.ToUpper("Requests"))
-	}
-	if m.focus == focusWorkflows {
-		workflowsTitle = m.theme.PaneTitleRequests.
-			Width(innerWidth).
-			Align(lipgloss.Center).
-			Foreground(m.theme.PaneActiveForeground).
-			Render(strings.ToUpper("Workflows"))
-	}
 
+	tabs := m.renderSidebarTabs(paneActive, innerWidth)
+	tabs = lipgloss.NewStyle().
+		MaxWidth(innerWidth).
+		Render(tabs)
+
+	var content string
 	listStyle := lipgloss.NewStyle().Width(innerWidth)
-	filesView := listStyle.Render(m.fileList.View())
-	requestsView := listStyle.Render(m.requestList.View())
-	workflowsView := listStyle.Render(m.workflowList.View())
-	if m.focus == focusFile {
-		filesView = listStyle.
-			Foreground(m.theme.PaneBorderFocusFile).
-			Render(m.fileList.View())
-	}
-	if m.focus == focusRequests {
-		requestsView = listStyle.
-			Foreground(m.theme.PaneBorderFocusRequests).
-			Render(m.requestList.View())
-	}
-	if m.focus == focusWorkflows {
-		workflowsView = listStyle.
-			Foreground(m.theme.PaneBorderFocusRequests).
-			Render(m.workflowList.View())
-	}
-	if len(m.fileList.Items()) == 0 {
-		filesView = centeredListView(
-			filesView,
-			innerWidth,
-			m.theme.HeaderValue.Render("No items"))
-	}
-	if len(m.requestItems) == 0 {
-		requestsView = centeredListView(
-			requestsView,
-			innerWidth,
-			m.theme.HeaderValue.Render("No requests parsed"))
-	}
-	if len(m.workflowItems) == 0 {
-		workflowsView = centeredListView(
-			workflowsView,
-			innerWidth,
-			m.theme.HeaderValue.Render("No workflows defined"))
-	}
-	separator := m.theme.PaneDivider.
-		Width(innerWidth).
-		Render(strings.Repeat("─", innerWidth))
 
-	filesSection := lipgloss.JoinVertical(
-		lipgloss.Left,
-		filesTitle,
-		separator,
-		filesView,
-	)
-	requestsSection := lipgloss.JoinVertical(
-		lipgloss.Left,
-		requestsTitle,
-		separator,
-		requestsView,
-	)
-	workflowsSection := lipgloss.JoinVertical(
-		lipgloss.Left,
-		workflowsTitle,
-		separator,
-		workflowsView,
-	)
+	switch m.activeSidebarTab {
+	case sidebarTabFiles:
+		filesView := listStyle.Render(m.fileList.View())
+		if m.focus == focusFile {
+			filesView = listStyle.
+				Foreground(m.theme.PaneBorderFocusFile).
+				Render(m.fileList.View())
+		}
+		if len(m.fileList.Items()) == 0 {
+			filesView = centeredListView(
+				filesView,
+				innerWidth,
+				m.theme.HeaderValue.Render("No items"))
+		}
+		content = filesView
 
-	inactiveSection := lipgloss.NewStyle().Faint(true)
-	if m.focus != focusFile {
-		filesSection = inactiveSection.Render(filesSection)
-	}
-	if m.focus != focusRequests {
-		requestsSection = inactiveSection.Render(requestsSection)
-	}
-	if m.focus != focusWorkflows {
-		workflowsSection = inactiveSection.Render(workflowsSection)
+	case sidebarTabRequests:
+		requestsView := listStyle.Render(m.requestList.View())
+		if m.focus == focusRequests {
+			requestsView = listStyle.
+				Foreground(m.theme.PaneBorderFocusRequests).
+				Render(m.requestList.View())
+		}
+		if len(m.requestItems) == 0 {
+			requestsView = centeredListView(
+				requestsView,
+				innerWidth,
+				m.theme.HeaderValue.Render("No requests parsed"))
+		}
+		content = requestsView
+
+	case sidebarTabWorkflows:
+		workflowsView := listStyle.Render(m.workflowList.View())
+		if m.focus == focusWorkflows {
+			workflowsView = listStyle.
+				Foreground(m.theme.PaneBorderFocusRequests).
+				Render(m.workflowList.View())
+		}
+		if len(m.workflowItems) == 0 {
+			workflowsView = centeredListView(
+				workflowsView,
+				innerWidth,
+				m.theme.HeaderValue.Render("No workflows defined"))
+		}
+		content = workflowsView
 	}
 
-	if m.focus == focusFile {
-		highlight := lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(m.theme.PaneBorderFocusFile).
-			Padding(0, 1)
-		filesSection = highlight.Render(filesSection)
-	}
-	if m.focus == focusRequests {
-		highlight := lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(m.theme.PaneBorderFocusRequests).
-			Padding(0, 1)
-		requestsSection = highlight.Render(requestsSection)
-	}
-	if m.focus == focusWorkflows {
-		highlight := lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
-			BorderForeground(m.theme.PaneBorderFocusRequests).
-			Padding(0, 1)
-		workflowsSection = highlight.Render(workflowsSection)
-	}
-	sections := []string{filesSection, "", requestsSection}
-	if len(m.workflowItems) > 0 {
-		sections = append(sections, "", workflowsSection)
-	}
-	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
 	if !paneActive {
+		tabs = faintStyle.Render(tabs)
 		content = faintStyle.Render(content)
 	}
 
-	gapCount := sidebarSplitPadding
-	if len(m.workflowItems) > 0 {
-		gapCount++
+	tabsHeight := lipgloss.Height(tabs)
+	availableContentHeight := m.paneContentHeight - tabsHeight
+	if availableContentHeight < 1 {
+		availableContentHeight = 1
 	}
-	contentHeight := m.sidebarFilesHeight + m.sidebarRequestsHeight + gapCount
-	if contentHeight < m.paneContentHeight {
-		contentHeight = m.paneContentHeight
-	}
+
+	content = lipgloss.NewStyle().
+		Width(innerWidth).
+		Height(availableContentHeight).
+		Render(content)
+
+	column := lipgloss.JoinVertical(
+		lipgloss.Left,
+		tabs,
+		content,
+	)
+
 	frameHeight := style.GetVerticalFrameSize()
-	targetHeight := contentHeight + frameHeight
+	targetHeight := m.paneContentHeight + frameHeight
 	return style.
 		Width(width).
 		Height(targetHeight).
-		Render(content)
+		Render(column)
+}
+
+func (m Model) renderSidebarTabs(focused bool, width int) string {
+	tabs := m.availableSidebarTabs()
+	lineWidth := maxInt(width, 1)
+	rowStyle := m.theme.Tabs.Width(lineWidth).Align(lipgloss.Center)
+	contentLimit := lineWidth
+	if contentLimit < 1 {
+		contentLimit = 1
+	}
+	rowContent := m.buildSidebarTabRowContent(tabs, m.activeSidebarTab, focused, contentLimit)
+	row := rowStyle.Render(rowContent)
+	row = clampLines(row, 1)
+	divider := m.theme.PaneDivider.Width(lineWidth).Render(strings.Repeat("─", lineWidth))
+	block := lipgloss.JoinVertical(lipgloss.Left, row, divider)
+	return block
+}
+
+func (m Model) buildSidebarTabRowContent(tabs []sidebarTab, active sidebarTab, focused bool, limit int) string {
+	if limit <= 0 {
+		limit = 1
+	}
+
+	segments := make([]string, 0, len(tabs))
+	for _, tab := range tabs {
+		full := m.sidebarTabLabel(tab)
+		text := full
+		style := m.theme.TabInactive
+		if tab == active {
+			style = m.theme.TabActive
+			if focused {
+				text = tabIndicatorPrefix + text
+			}
+		}
+		segment := style.Render(text)
+		segments = append(segments, segment)
+	}
+	row := strings.Join(segments, " ")
+	rowWidth := ansi.StringWidth(row)
+	if rowWidth <= limit {
+		return row
+	}
+	return ansi.Truncate(row, limit, "…")
 }
 
 func centeredListView(view string, width int, content string) string {

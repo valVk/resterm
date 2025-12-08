@@ -436,27 +436,15 @@ func (m *Model) applyLayout() tea.Cmd {
 		m.editorSplit = realEditorRatio
 	}
 
-	fileListHeight := filesBase - sidebarChrome
-	if fileListHeight < 0 {
-		fileListHeight = 0
+	const sidebarTabsHeight = 2
+	fullListHeight := paneHeight - sidebarTabsHeight
+	if fullListHeight < 0 {
+		fullListHeight = 0
 	}
-	m.fileList.SetSize(maxInt(fileWidth-4, 0), fileListHeight)
 
-	requestListHeight := requestBase - sidebarChrome
-	if requestListHeight < 0 {
-		requestListHeight = 0
-	}
-	m.requestList.SetSize(maxInt(fileWidth-4, 0), requestListHeight)
-
-	if hasWorkflow && workflowBase > 0 {
-		workflowListHeight := workflowBase - sidebarChrome
-		if workflowListHeight < 0 {
-			workflowListHeight = 0
-		}
-		m.workflowList.SetSize(maxInt(fileWidth-4, 0), workflowListHeight)
-	} else {
-		m.workflowList.SetSize(maxInt(fileWidth-4, 0), 0)
-	}
+	m.fileList.SetSize(maxInt(fileWidth-4, 0), fullListHeight)
+	m.requestList.SetSize(maxInt(fileWidth-4, 0), fullListHeight)
+	m.workflowList.SetSize(maxInt(fileWidth-4, 0), fullListHeight)
 	m.editor.SetWidth(maxInt(editorWidth-4, 1))
 	m.editor.SetHeight(maxInt(editorHeight, 1))
 
