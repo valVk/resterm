@@ -156,7 +156,14 @@ func (t *fileTree) findNodeByPath(node *treeNode, path string) *treeNode {
 
 func (t *fileTree) flatten() []*treeNode {
 	var result []*treeNode
-	t.flattenNode(t.root, &result, false)
+	// Skip root directory, start with its children
+	if t.root.expanded {
+		for _, child := range t.root.children {
+			// Adjust depth to start from 0
+			child.depth = 0
+			t.flattenNode(child, &result, false)
+		}
+	}
 	t.flatList = result
 	return result
 }
@@ -166,7 +173,7 @@ func (t *fileTree) flattenNode(node *treeNode, result *[]*treeNode, skipRoot boo
 		*result = append(*result, node)
 	}
 
-	if node.expanded || skipRoot {
+	if node.expanded {
 		for _, child := range node.children {
 			t.flattenNode(child, result, false)
 		}

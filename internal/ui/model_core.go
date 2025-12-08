@@ -397,7 +397,7 @@ func New(cfg Config) Model {
 	treeNodes := tree.flatten()
 
 	// Use viewport-based scrolling tree view
-	fileTreeView := newFileTreeViewport(makeTreeItemsArray(treeNodes))
+	fileTreeView := newFileTreeViewport(makeTreeItemsArray(treeNodes), th)
 	if cfg.FilePath != "" {
 		for i, node := range treeNodes {
 			if node.nodeType == treeNodeFile && filepath.Clean(node.path) == filepath.Clean(cfg.FilePath) {
