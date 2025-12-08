@@ -305,7 +305,9 @@ func (m *Model) applyLayout() tea.Cmd {
 		m.editorSplit = realEditorRatio
 	}
 
-	// File tree now contains everything (files + requests), so give it full height
+	// Size the viewport-based tree view
+	m.fileTreeView.SetSize(maxInt(fileWidth-4, 0), paneHeight)
+	// Keep old list sized for compatibility
 	m.fileList.SetSize(maxInt(fileWidth-4, 0), paneHeight)
 	// Request and workflow lists are no longer used with tree navigation
 	m.requestList.SetSize(maxInt(fileWidth-4, 0), requestHeight)

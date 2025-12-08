@@ -7,12 +7,11 @@ func (m *Model) refreshFileTree() {
 		return
 	}
 	nodes := m.fileTree.flatten()
-	items := makeTreeItems(nodes)
-	m.fileList.SetItems(items)
+	m.fileTreeView.SetItems(makeTreeItemsArray(nodes))
 }
 
 func (m *Model) expandOrOpenTreeNode() tea.Cmd {
-	node := selectedTreeNode(m.fileList.SelectedItem())
+	node := m.fileTreeView.SelectedItem()
 	if node == nil {
 		return nil
 	}
@@ -46,7 +45,7 @@ func (m *Model) expandOrOpenTreeNode() tea.Cmd {
 }
 
 func (m *Model) collapseOrCloseTreeNode() tea.Cmd {
-	node := selectedTreeNode(m.fileList.SelectedItem())
+	node := m.fileTreeView.SelectedItem()
 	if node == nil {
 		return nil
 	}

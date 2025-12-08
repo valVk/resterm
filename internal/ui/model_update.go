@@ -313,20 +313,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.suppressListKey {
 				m.suppressListKey = false
 			} else {
-				if keyMsg, ok := msg.(tea.KeyMsg); ok {
-					keyStr := keyMsg.String()
-					if keyStr == "left" || keyStr == "h" || keyStr == "right" || keyStr == "l" {
-						// Don't pass left/right/h/l to the list - we handle these for tree navigation
-					} else {
-						var fileCmd tea.Cmd
-						m.fileList, fileCmd = m.fileList.Update(msg)
-						cmds = append(cmds, fileCmd)
-					}
-				} else {
-					var fileCmd tea.Cmd
-					m.fileList, fileCmd = m.fileList.Update(msg)
-					cmds = append(cmds, fileCmd)
-				}
+				// Pass to viewport-based tree view
+				var fileCmd tea.Cmd
+				fileCmd = m.fileTreeView.Update(msg)
+				cmds = append(cmds, fileCmd)
 			}
 		case focusRequests:
 			if m.suppressListKey {

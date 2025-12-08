@@ -267,6 +267,14 @@ func makeTreeItems(nodes []*treeNode) []list.Item {
 	return items
 }
 
+func makeTreeItemsArray(nodes []*treeNode) []treeItem {
+	items := make([]treeItem, len(nodes))
+	for i, node := range nodes {
+		items[i] = treeItem{node: node}
+	}
+	return items
+}
+
 func selectedTreeNode(it list.Item) *treeNode {
 	if it == nil {
 		return nil

@@ -206,46 +206,16 @@ func (m Model) renderFilePane() string {
 		zoomHidden := m.zoomActive && m.zoomRegion != paneRegionSidebar
 		return m.renderCollapsedPane(style, width, height, "Sidebar", "g1", zoomHidden, paneActive)
 	}
-	innerWidth := maxInt(1, width-4)
-
-	listStyle := lipgloss.NewStyle().Width(innerWidth)
-	content := listStyle.Render(m.fileList.View())
-	if m.focus == focusFile {
-		content = listStyle.
-			Foreground(m.theme.PaneBorderFocusFile).
-			Render(m.fileList.View())
-	}
-	if len(m.fileList.Items()) == 0 {
-		content = centeredListView(
-			content,
-			innerWidth,
-			m.theme.HeaderValue.Render("No items"))
-	}
+	// Use viewport-based tree view
+	content := m.fileTreeView.View()
 
 	if !paneActive {
 		content = faintStyle.Render(content)
 	}
 
-	// Constrain content height - use MaxHeight to crop if too tall
-	contentStyle := lipgloss.NewStyle().Width(innerWidth)
-	actualHeight := lipgloss.Height(content)
-	if actualHeight <= m.paneContentHeight {
-		// Content fits, pad to fill height
-		contentStyle = contentStyle.Height(m.paneContentHeight)
-	} else {
-		// Content too tall, crop to fit by taking first N lines
-		lines := strings.Split(content, "\n")
-		if len(lines) > m.paneContentHeight {
-			lines = lines[:m.paneContentHeight]
-			content = strings.Join(lines, "\n")
-		}
-		contentStyle = contentStyle.Height(m.paneContentHeight)
-	}
-	content = contentStyle.Render(content)
-
-	// The outer border should match paneContentHeight to keep panes aligned
 	frameHeight := style.GetVerticalFrameSize()
 	targetHeight := m.paneContentHeight + frameHeight
+
 	return style.
 		Width(width).
 		Height(targetHeight).

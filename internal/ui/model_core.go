@@ -191,6 +191,7 @@ type Model struct {
 	workspaceRecursive bool
 
 	fileTree                 *fileTree
+	fileTreeView             fileTreeViewport
 	fileList                 list.Model
 	requestList              list.Model
 	workflowList             list.Model
@@ -394,24 +395,26 @@ func New(cfg Config) Model {
 	tree := newFileTree(workspace)
 	tree.buildFromFiles(entries, workspace)
 	treeNodes := tree.flatten()
-	treeItems := makeTreeItems(treeNodes)
 
-	fileList := list.New(treeItems, listDelegateForTheme(th, true, 1), 0, 0)
-	fileList.Title = "Files"
-	fileList.SetShowStatusBar(false)
-	fileList.SetShowHelp(false)
-	fileList.SetFilteringEnabled(true)
-	fileList.SetShowTitle(false)
-	fileList.SetShowPagination(true) // Explicitly enable pagination
-	fileList.DisableQuitKeybindings()
+	// Use viewport-based scrolling tree view
+	fileTreeView := newFileTreeViewport(makeTreeItemsArray(treeNodes))
 	if cfg.FilePath != "" {
 		for i, node := range treeNodes {
 			if node.nodeType == treeNodeFile && filepath.Clean(node.path) == filepath.Clean(cfg.FilePath) {
-				fileList.Select(i)
+				fileTreeView.Select(i)
 				break
 			}
 		}
 	}
+
+	// Keep old list for compatibility (not used for tree anymore)
+	fileList := list.New(nil, listDelegateForTheme(th, true, 1), 40, 20)
+	fileList.SetShowStatusBar(false)
+	fileList.SetShowHelp(false)
+	fileList.SetFilteringEnabled(true)
+	fileList.SetShowTitle(false)
+	fileList.SetShowPagination(false)
+	fileList.DisableQuitKeybindings()
 
 	editor := newRequestEditor()
 	editor.SetRuneStyler(newMetadataRuneStyler(th.EditorMetadata))
@@ -532,6 +535,7 @@ func New(cfg Config) Model {
 		workspaceRoot:          workspace,
 		workspaceRecursive:     cfg.Recursive,
 		fileTree:               tree,
+		fileTreeView:           fileTreeView,
 		fileList:               fileList,
 		requestList:            requestList,
 		workflowList:           workflowList,
