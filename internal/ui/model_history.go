@@ -1655,7 +1655,7 @@ func (m *Model) loadHistorySelection(send bool) tea.Cmd {
 		replayText = fmt.Sprintf("Replaying %s", trimmed)
 	}
 	m.setStatusMessage(statusMsg{text: replayText, level: statusInfo})
-	return m.executeRequest(doc, req, options, "")
+	return tea.Batch(m.executeRequest(doc, req, options, ""), m.requestSpinner.Tick)
 }
 
 func (m *Model) presentHistoryEntry(entry history.Entry, req *restfile.Request) tea.Cmd {

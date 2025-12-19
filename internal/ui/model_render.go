@@ -1751,6 +1751,12 @@ func (m Model) renderStatusBar() string {
 		segments = append(segments, "Unsaved changes")
 	}
 
+	// Show spinner when request is in progress
+	if m.sending {
+		spinnerText := m.requestSpinner.View() + " Sending request"
+		segments = append(segments, spinnerText)
+	}
+
 	staticText := strings.Join(segments, sep)
 	staticWidth := lipgloss.Width(staticText)
 	if staticWidth > 0 {

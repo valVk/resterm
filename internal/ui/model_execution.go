@@ -217,10 +217,13 @@ func (m *Model) sendActiveRequest() tea.Cmd {
 	m.setStatusMessage(statusMsg{text: base, level: statusInfo})
 
 	execCmd := m.executeRequest(doc, cloned, options, "")
+	spinnerCmd := m.requestSpinner.Tick
+	var batchCmds []tea.Cmd
+	batchCmds = append(batchCmds, execCmd, spinnerCmd)
 	if tick := m.startStatusPulse(); tick != nil {
-		return tea.Batch(execCmd, tick)
+		batchCmds = append(batchCmds, tick)
 	}
-	return execCmd
+	return tea.Batch(batchCmds...)
 }
 
 // Allow CLI-level compare flags to kick off a sweep even when the request lacks

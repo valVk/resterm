@@ -113,10 +113,12 @@ func (m *Model) startProfileRun(doc *restfile.Document, req *restfile.Request, o
 
 	m.setStatusMessage(statusMsg{text: fmt.Sprintf("%s warmup 0/%d", state.messageBase, state.warmup), level: statusInfo})
 	execCmd := m.executeProfileIteration()
+	var batchCmds []tea.Cmd
+	batchCmds = append(batchCmds, execCmd, m.requestSpinner.Tick)
 	if tick := m.startStatusPulse(); tick != nil {
-		return tea.Batch(execCmd, tick)
+		batchCmds = append(batchCmds, tick)
 	}
-	return execCmd
+	return tea.Batch(batchCmds...)
 }
 
 func (m *Model) executeProfileIteration() tea.Cmd {
@@ -230,16 +232,20 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 		m.sending = true
 		if state.delay > 0 {
 			next := tea.Tick(state.delay, func(time.Time) tea.Msg { return profileNextIterationMsg{} })
+			var batchCmds []tea.Cmd
+			batchCmds = append(batchCmds, next, m.requestSpinner.Tick)
 			if tick := m.startStatusPulse(); tick != nil {
-				return tea.Batch(next, tick)
+				batchCmds = append(batchCmds, tick)
 			}
-			return next
+			return tea.Batch(batchCmds...)
 		}
 		exec := m.executeProfileIteration()
+		var batchCmds []tea.Cmd
+		batchCmds = append(batchCmds, exec, m.requestSpinner.Tick)
 		if tick := m.startStatusPulse(); tick != nil {
-			return tea.Batch(exec, tick)
+			batchCmds = append(batchCmds, tick)
 		}
-		return exec
+		return tea.Batch(batchCmds...)
 	}
 
 	return m.finalizeProfileRun(msg, state)

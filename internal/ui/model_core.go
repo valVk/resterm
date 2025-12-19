@@ -10,9 +10,11 @@ import (
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/unkn0wn-root/resterm/internal/bindings"
 	"github.com/unkn0wn-root/resterm/internal/config"
@@ -320,6 +322,7 @@ type Model struct {
 	dirty                  bool
 	sending                bool
 	sendCancel             context.CancelFunc
+	requestSpinner         spinner.Model
 	suppressEditorKey      bool
 	editorInsertMode       bool
 	editorWriteKeyMap      textarea.KeyMap
@@ -622,6 +625,7 @@ func New(cfg Config) Model {
 		editorInsertMode:         false,
 		editorWriteKeyMap:        writeKeyMap,
 		editorViewKeyMap:         viewKeyMap,
+		requestSpinner:           createRequestSpinner(),
 		newFileInput:             newFileInput,
 		openPathInput:            openPathInput,
 		responseSaveInput:        responseSaveInput,
@@ -668,4 +672,11 @@ func New(cfg Config) Model {
 	}
 
 	return model
+}
+
+func createRequestSpinner() spinner.Model {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	return s
 }

@@ -32,6 +32,13 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Update spinner if request is in progress
+	if m.sending {
+		var cmd tea.Cmd
+		m.requestSpinner, cmd = m.requestSpinner.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
 	switch typed := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.frameWidth = typed.Width

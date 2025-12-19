@@ -174,10 +174,12 @@ func (m *Model) executeWorkflowStep() tea.Cmd {
 	}
 
 	cmd := m.executeRequest(state.doc, clone, options, "", extraVars)
+	var batchCmds []tea.Cmd
+	batchCmds = append(batchCmds, cmd, m.requestSpinner.Tick)
 	if tick := m.startStatusPulse(); tick != nil {
-		return tea.Batch(cmd, tick)
+		batchCmds = append(batchCmds, tick)
 	}
-	return cmd
+	return tea.Batch(batchCmds...)
 }
 
 func (m *Model) handleWorkflowResponse(msg responseMsg) tea.Cmd {

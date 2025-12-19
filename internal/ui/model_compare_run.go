@@ -101,6 +101,7 @@ func (m *Model) startCompareRun(doc *restfile.Document, req *restfile.Request, s
 	m.statusPulseFrame = -1
 
 	var cmds []tea.Cmd
+	cmds = append(cmds, m.requestSpinner.Tick)
 	if !m.responseSplit {
 		targetOrientation := responseSplitHorizontal
 		if m.mainSplitOrientation == mainSplitHorizontal {
@@ -145,10 +146,12 @@ func (m *Model) executeCompareIteration() tea.Cmd {
 		return m.executeRequest(state.doc, clone, state.options, env)
 	})
 
+	var batchCmds []tea.Cmd
+	batchCmds = append(batchCmds, runCmd, m.requestSpinner.Tick)
 	if tick := m.startStatusPulse(); tick != nil {
-		return tea.Batch(runCmd, tick)
+		batchCmds = append(batchCmds, tick)
 	}
-	return runCmd
+	return tea.Batch(batchCmds...)
 }
 
 // Snapshot each iteration immediately so the compare tab and diff panes can
