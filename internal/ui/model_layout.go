@@ -122,148 +122,156 @@ func (m *Model) applyLayout() tea.Cmd {
 	var editorWidth, responseWidth int
 	var editorHeight int
 
-	if m.mainSplitOrientation == mainSplitHorizontal {
-		editorWidth = remaining
+	if !m.editorVisible {
+		editorWidth = 0
+		editorHeight = 0
 		responseWidth = remaining
-		editorFrame := m.theme.EditorBorder.GetVerticalFrameSize()
-		responseFrame := m.theme.ResponseBorder.GetVerticalFrameSize()
-		frameAllowance := editorFrame + responseFrame
-		availableHeight := paneHeight - frameAllowance
-		if availableHeight < 2 {
-			availableHeight = maxInt(paneHeight-frameAllowance, 1)
-		}
+		m.editorContentHeight = 0
+		m.responseContentHeight = paneHeight
+	} else {
+		if m.mainSplitOrientation == mainSplitHorizontal {
+			editorWidth = remaining
+			responseWidth = remaining
+			editorFrame := m.theme.EditorBorder.GetVerticalFrameSize()
+			responseFrame := m.theme.ResponseBorder.GetVerticalFrameSize()
+			frameAllowance := editorFrame + responseFrame
+			availableHeight := paneHeight - frameAllowance
+			if availableHeight < 2 {
+				availableHeight = maxInt(paneHeight-frameAllowance, 1)
+			}
 
-		ratio := m.editorSplit
-		if ratio <= 0 {
-			ratio = editorSplitDefault
-		}
+			ratio := m.editorSplit
+			if ratio <= 0 {
+				ratio = editorSplitDefault
+			}
 
-		minEditor := minEditorPaneHeight
-		if minEditor < 1 {
-			minEditor = 1
-		}
-		minResponse := minResponsePaneHeight
-		if minResponse < 1 {
-			minResponse = 1
-		}
-		if availableHeight < minEditor+minResponse {
-			distributed := maxInt(availableHeight/2, 1)
-			minEditor = distributed
-			minResponse = availableHeight - distributed
+			minEditor := minEditorPaneHeight
+			if minEditor < 1 {
+				minEditor = 1
+			}
+			minResponse := minResponsePaneHeight
 			if minResponse < 1 {
 				minResponse = 1
-				if availableHeight > 1 {
-					minEditor = availableHeight - minResponse
+			}
+			if availableHeight < minEditor+minResponse {
+				distributed := maxInt(availableHeight/2, 1)
+				minEditor = distributed
+				minResponse = availableHeight - distributed
+				if minResponse < 1 {
+					minResponse = 1
+					if availableHeight > 1 {
+						minEditor = availableHeight - minResponse
+					}
 				}
 			}
-		}
 
-		editorHeight = int(math.Round(float64(availableHeight) * ratio))
-		if editorHeight < minEditor {
-			editorHeight = minEditor
-		}
-		maxEditor := availableHeight - minResponse
-		if maxEditor < minEditor {
-			maxEditor = minEditor
-		}
-		if editorHeight > maxEditor {
-			editorHeight = maxEditor
-		}
-		responseHeight := availableHeight - editorHeight
-		if responseHeight < minResponse {
-			responseHeight = minResponse
-			editorHeight = availableHeight - responseHeight
-			if editorHeight < 1 {
-				editorHeight = 1
+			editorHeight = int(math.Round(float64(availableHeight) * ratio))
+			if editorHeight < minEditor {
+				editorHeight = minEditor
 			}
-		}
-		if responseHeight < 1 {
-			responseHeight = 1
-		}
-		m.editorContentHeight = editorHeight
-		m.responseContentHeight = responseHeight
-	} else {
-		editorMin := minEditorPaneWidth
-		responseMin := minResponsePaneWidth
-		ratio := m.editorSplit
-		if ratio <= 0 {
-			ratio = editorSplitDefault
-		}
-
-		if remaining < editorMin+responseMin {
-			scaledEditor := int(math.Round(float64(remaining) * ratio))
-			if scaledEditor < 1 {
-				scaledEditor = 1
+			maxEditor := availableHeight - minResponse
+			if maxEditor < minEditor {
+				maxEditor = minEditor
 			}
-			if scaledEditor > remaining-1 {
-				scaledEditor = remaining - 1
+			if editorHeight > maxEditor {
+				editorHeight = maxEditor
 			}
-			editorMin = scaledEditor
-			responseMin = remaining - editorMin
-			if responseMin < 1 {
-				responseMin = 1
-				editorMin = remaining - responseMin
-				if editorMin < 1 {
-					editorMin = 1
+			responseHeight := availableHeight - editorHeight
+			if responseHeight < minResponse {
+				responseHeight = minResponse
+				editorHeight = availableHeight - responseHeight
+				if editorHeight < 1 {
+					editorHeight = 1
 				}
 			}
-		}
+			if responseHeight < 1 {
+				responseHeight = 1
+			}
+			m.editorContentHeight = editorHeight
+			m.responseContentHeight = responseHeight
+		} else {
+			editorMin := minEditorPaneWidth
+			responseMin := minResponsePaneWidth
+			ratio := m.editorSplit
+			if ratio <= 0 {
+				ratio = editorSplitDefault
+			}
 
-		desiredEditor := int(math.Round(float64(remaining) * ratio))
-		if desiredEditor < editorMin {
-			desiredEditor = editorMin
-		}
+			if remaining < editorMin+responseMin {
+				scaledEditor := int(math.Round(float64(remaining) * ratio))
+				if scaledEditor < 1 {
+					scaledEditor = 1
+				}
+				if scaledEditor > remaining-1 {
+					scaledEditor = remaining - 1
+				}
+				editorMin = scaledEditor
+				responseMin = remaining - editorMin
+				if responseMin < 1 {
+					responseMin = 1
+					editorMin = remaining - responseMin
+					if editorMin < 1 {
+						editorMin = 1
+					}
+				}
+			}
 
-		maxEditor := remaining - responseMin
-		if maxEditor < editorMin {
-			maxEditor = editorMin
-		}
-		if desiredEditor > maxEditor {
-			desiredEditor = maxEditor
-		}
+			desiredEditor := int(math.Round(float64(remaining) * ratio))
+			if desiredEditor < editorMin {
+				desiredEditor = editorMin
+			}
 
-		editorWidth = desiredEditor
-		responseWidth = remaining - editorWidth
-		if responseWidth < responseMin {
-			responseWidth = responseMin
-			editorWidth = remaining - responseWidth
-		}
-		if editorWidth < editorMin {
-			editorWidth = editorMin
+			maxEditor := remaining - responseMin
+			if maxEditor < editorMin {
+				maxEditor = editorMin
+			}
+			if desiredEditor > maxEditor {
+				desiredEditor = maxEditor
+			}
+
+			editorWidth = desiredEditor
 			responseWidth = remaining - editorWidth
-		}
-
-		if responseWidth < 1 {
-			responseWidth = 1
-			if remaining > 1 {
+			if responseWidth < responseMin {
+				responseWidth = responseMin
 				editorWidth = remaining - responseWidth
 			}
-		}
-
-		if editorWidth < 1 {
-			editorWidth = 1
-			if remaining > 1 {
+			if editorWidth < editorMin {
+				editorWidth = editorMin
 				responseWidth = remaining - editorWidth
-				if responseWidth < 1 {
-					responseWidth = 1
+			}
+
+			if responseWidth < 1 {
+				responseWidth = 1
+				if remaining > 1 {
+					editorWidth = remaining - responseWidth
 				}
 			}
+
+			if editorWidth < 1 {
+				editorWidth = 1
+				if remaining > 1 {
+					responseWidth = remaining - editorWidth
+					if responseWidth < 1 {
+						responseWidth = 1
+					}
+				}
+			}
+
+			editorHeight = paneHeight
+			m.editorContentHeight = paneHeight
+			m.responseContentHeight = paneHeight
 		}
 
-		editorHeight = paneHeight
-		m.editorContentHeight = paneHeight
-		m.responseContentHeight = paneHeight
+		if m.mainSplitOrientation == mainSplitVertical {
+			editorWidth, responseWidth = redistributeCollapsedWidths(editorWidth, responseWidth, editorCollapsed, responseCollapsed)
+		} else {
+			m.editorContentHeight, m.responseContentHeight = redistributeCollapsedHeights(m.editorContentHeight, m.responseContentHeight, editorCollapsed, responseCollapsed)
+			editorHeight = m.editorContentHeight
+		}
 	}
 
-	if m.mainSplitOrientation == mainSplitVertical {
-		editorWidth, responseWidth = redistributeCollapsedWidths(editorWidth, responseWidth, editorCollapsed, responseCollapsed)
-	} else {
-		m.editorContentHeight, m.responseContentHeight = redistributeCollapsedHeights(m.editorContentHeight, m.responseContentHeight, editorCollapsed, responseCollapsed)
-		editorHeight = m.editorContentHeight
-	}
-
-	if editorWidth < 1 {
-		editorWidth = 1
+	if editorWidth < 0 {
+		editorWidth = 0
 	}
 	if responseWidth < 1 {
 		responseWidth = 1
@@ -294,6 +302,7 @@ func (m *Model) applyLayout() tea.Cmd {
 	m.workflowList.SetSize(listWidth, 0)
 
 	if m.mainSplitOrientation == mainSplitVertical && remaining > 0 &&
+		m.editorVisible &&
 		!m.collapseState(paneRegionEditor) &&
 		!m.collapseState(paneRegionResponse) && !m.zoomActive {
 		realEditorRatio := float64(editorWidth) / float64(remaining)
@@ -305,8 +314,8 @@ func (m *Model) applyLayout() tea.Cmd {
 		}
 		m.editorSplit = realEditorRatio
 	}
-	m.editor.SetWidth(maxInt(editorWidth-4, 1))
-	m.editor.SetHeight(maxInt(editorHeight, 1))
+	m.editor.SetWidth(maxInt(editorWidth-4, 0))
+	m.editor.SetHeight(maxInt(editorHeight, 0))
 
 	primaryContentWidth := maxInt(responseWidth-4, 1)
 	primaryPane := &m.responsePanes[0]
@@ -601,8 +610,8 @@ func redistributeCollapsedWidths(editorWidth, responseWidth int, editorCollapsed
 			editorWidth += freed
 		}
 	}
-	if editorWidth < 1 {
-		editorWidth = 1
+	if editorWidth < 0 {
+		editorWidth = 0
 	}
 	if responseWidth < 1 {
 		responseWidth = 1

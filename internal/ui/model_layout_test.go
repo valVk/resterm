@@ -10,6 +10,7 @@ import (
 func TestAdjustSidebarWidthModifiesWidths(t *testing.T) {
 	cfg := Config{WorkspaceRoot: t.TempDir()}
 	model := New(cfg)
+	model.editorVisible = true
 	model.width = 180
 	model.height = 60
 	model.ready = true
@@ -47,6 +48,7 @@ func TestAdjustSidebarWidthModifiesWidths(t *testing.T) {
 func TestAdjustSidebarWidthClampsBounds(t *testing.T) {
 	cfg := Config{WorkspaceRoot: t.TempDir()}
 	model := New(cfg)
+	model.editorVisible = true
 	model.width = 160
 	model.height = 60
 	model.ready = true
@@ -77,6 +79,7 @@ func TestAdjustSidebarWidthClampsBounds(t *testing.T) {
 func TestAdjustEditorSplitReallocatesWidths(t *testing.T) {
 	cfg := Config{WorkspaceRoot: t.TempDir()}
 	model := New(cfg)
+	model.editorVisible = true
 	model.width = 160
 	model.height = 60
 	model.ready = true
@@ -112,6 +115,7 @@ func TestAdjustEditorSplitReallocatesWidths(t *testing.T) {
 func TestResponsePaneWidthMatchesLayout(t *testing.T) {
 	cfg := Config{WorkspaceRoot: t.TempDir()}
 	m := New(cfg)
+	m.editorVisible = true
 	m.width = 180
 	m.height = 60
 	m.ready = true
@@ -151,6 +155,7 @@ func TestResponsePaneWidthMatchesLayout(t *testing.T) {
 func TestZoomEditorKeepsResponseWithinBounds(t *testing.T) {
 	cfg := Config{WorkspaceRoot: t.TempDir()}
 	m := New(cfg)
+	m.editorVisible = true
 	m.width = 160
 	m.height = 50
 	m.ready = true
@@ -193,6 +198,7 @@ func TestZoomEditorKeepsResponseWithinBounds(t *testing.T) {
 func TestCollapseResponseExpandsEditorWidth(t *testing.T) {
 	cfg := Config{WorkspaceRoot: t.TempDir()}
 	model := New(cfg)
+	model.editorVisible = true
 	model.width = 180
 	model.height = 60
 	model.ready = true
@@ -217,6 +223,7 @@ func TestCollapseResponseExpandsEditorWidth(t *testing.T) {
 func TestAdjustEditorSplitClampsBounds(t *testing.T) {
 	cfg := Config{WorkspaceRoot: t.TempDir()}
 	model := New(cfg)
+	model.editorVisible = true
 	model.width = 160
 	model.height = 60
 	model.ready = true
@@ -248,6 +255,7 @@ func TestAdjustEditorSplitClampsBounds(t *testing.T) {
 func TestZoomEditorHidesOtherPanes(t *testing.T) {
 	cfg := Config{WorkspaceRoot: t.TempDir()}
 	model := New(cfg)
+	model.editorVisible = true
 	model.width = 140
 	model.height = 50
 	model.ready = true
@@ -299,6 +307,7 @@ func TestApplyLayoutKeepsPaneWidthsWithinWindow(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			model := New(cfg)
 			model.ready = true
+			model.editorVisible = true
 			model.width = tc.width
 			model.height = 40
 			_ = model.applyLayout()

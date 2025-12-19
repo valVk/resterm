@@ -29,9 +29,9 @@ const (
 	LayoutSidebarWidthDefault  = 0.2
 	LayoutSidebarWidthMin      = 0.05
 	LayoutSidebarWidthMax      = 0.3
-	LayoutEditorSplitDefault   = 0.6
+	LayoutEditorSplitDefault   = 0.75
 	LayoutEditorSplitMin       = 0.3
-	LayoutEditorSplitMax       = 0.63
+	LayoutEditorSplitMax       = 0.85
 	LayoutResponseRatioDefault = 0.5
 	LayoutResponseRatioMin     = 0.1
 	LayoutResponseRatioMax     = 0.9

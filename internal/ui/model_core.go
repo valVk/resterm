@@ -204,6 +204,7 @@ type Model struct {
 	responseSplitOrientation responseSplitOrientation
 	responsePaneFocus        responsePaneID
 	responsePaneChord        bool
+	editorVisible            bool
 	sidebarCollapsed         bool
 	editorCollapsed          bool
 	responseCollapsed        bool
@@ -617,6 +618,7 @@ func New(cfg Config) Model {
 		updateClient:             cfg.UpdateClient,
 		updateVersion:            updateVersion,
 		updateEnabled:            updateEnabled,
+		editorVisible:            false,
 		editorInsertMode:         false,
 		editorWriteKeyMap:        writeKeyMap,
 		editorViewKeyMap:         viewKeyMap,

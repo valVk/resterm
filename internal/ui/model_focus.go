@@ -9,7 +9,11 @@ func (m *Model) cycleFocus(forward bool) {
 	switch m.focus {
 	case focusFile, focusRequests, focusWorkflows:
 		if forward {
-			m.setFocus(focusEditor)
+			if !m.editorVisible {
+				m.setFocus(focusResponse)
+			} else {
+				m.setFocus(focusEditor)
+			}
 		} else {
 			m.setFocus(focusResponse)
 		}
@@ -23,7 +27,11 @@ func (m *Model) cycleFocus(forward bool) {
 		if forward {
 			m.setFocus(focusRequests)
 		} else {
-			m.setFocus(focusEditor)
+			if !m.editorVisible {
+				m.setFocus(focusRequests)
+			} else {
+				m.setFocus(focusEditor)
+			}
 		}
 	}
 }

@@ -689,12 +689,61 @@ func (m *Model) prepareNavigatorRequest() (*restfile.Request, *navigator.Node[an
 	return req, n, cmds, true
 }
 
+func (m *Model) prepareNavigatorWorkflow() (*restfile.Workflow, *navigator.Node[any], []tea.Cmd, bool) {
+	if m.navigator == nil {
+		return nil, nil, nil, false
+	}
+	n := m.navigator.Selected()
+	if n == nil || n.Kind != navigator.KindWorkflow {
+		return nil, nil, nil, false
+	}
+	if !m.confirmCrossFileNavigation(n) {
+		return nil, nil, []tea.Cmd{func() tea.Msg { return nil }}, false
+	}
+	wf, ok := n.Payload.Data.(*restfile.Workflow)
+	if !ok || wf == nil {
+		return nil, nil, nil, false
+	}
+	cmds, okFile := m.ensureNavigatorFile(n)
+	if !okFile {
+		if len(cmds) == 0 {
+			return nil, nil, nil, false
+		}
+		return nil, nil, cmds, false
+	}
+	if !m.selectWorkflowForNode(wf, n.ID) {
+		m.setStatusMessage(statusMsg{text: "Workflow not found in file", level: statusWarn})
+		if len(cmds) == 0 {
+			return nil, nil, nil, false
+		}
+		return nil, nil, cmds, false
+	}
+	return wf, n, cmds, true
+}
+
 func (m *Model) revealRequestInEditor(req *restfile.Request) {
 	if req == nil {
 		return
 	}
 	start := req.LineRange.Start - 1
 	// Move cursor to the start of the request
+	m.moveCursorToLine(start)
+	// Use typewriter mode to center the cursor
+	h := m.editor.Height()
+	if h <= 0 {
+		h = 1
+	}
+	total := m.editor.LineCount()
+	offset := scroll.Align(start, m.editor.ViewStart(), h, total)
+	m.editor.SetViewStart(offset)
+}
+
+func (m *Model) revealWorkflowInEditor(wf *restfile.Workflow) {
+	if wf == nil {
+		return
+	}
+	start := wf.LineRange.Start - 1
+	// Move cursor to the start of the workflow
 	m.moveCursorToLine(start)
 	// Use typewriter mode to center the cursor
 	h := m.editor.Height()
@@ -1176,6 +1225,13 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 				cmd := m.runPasteClipboard(true)
 				m.suppressEditorKey = true
 				return combine(cmd)
+			case "q":
+				if m.editorVisible {
+					m.editorVisible = false
+					m.setFocus(focusRequests)
+					m.suppressEditorKey = true
+					return combine(m.applyLayout())
+				}
 			case "u":
 				var cmd tea.Cmd
 				m.editor, cmd = m.editor.UndoLastChange()

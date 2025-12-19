@@ -125,6 +125,7 @@ func TestHandleKeyGhShrinksEditor(t *testing.T) {
 	model.width = 160
 	model.height = 50
 	model.ready = true
+	model.editorVisible = true
 	model.setFocus(focusEditor)
 	_ = model.applyLayout()
 	initialEditor := model.editor.Width()
@@ -144,6 +145,7 @@ func TestHandleKeyGlExpandsEditor(t *testing.T) {
 	model.width = 160
 	model.height = 50
 	model.ready = true
+	model.editorVisible = true
 	model.setFocus(focusEditor)
 	_ = model.applyLayout()
 	initialEditor := model.editor.Width()
@@ -159,6 +161,7 @@ func TestHandleKeyGhCanRepeatWithoutPrefix(t *testing.T) {
 	model.width = 160
 	model.height = 50
 	model.ready = true
+	model.editorVisible = true
 	model.setFocus(focusEditor)
 	_ = model.applyLayout()
 	start := model.editor.Width()
@@ -209,6 +212,7 @@ func TestHandleKeyGhShrinksSidebarWhenFocused(t *testing.T) {
 	model.width = 200
 	model.height = 60
 	model.ready = true
+	model.editorVisible = true
 	model.setFocus(focusFile)
 	_ = model.applyLayout()
 	initialSidebar := model.sidebarWidthPx
@@ -230,6 +234,7 @@ func TestHandleKeyGlExpandsSidebarWhenFocused(t *testing.T) {
 	model.width = 200
 	model.height = 60
 	model.ready = true
+	model.editorVisible = true
 	model.setFocus(focusRequests)
 	_ = model.applyLayout()
 	initialSidebar := model.sidebarWidthPx
@@ -251,6 +256,7 @@ func TestRunEditorResizeBlockedByZoom(t *testing.T) {
 	model.width = 160
 	model.height = 60
 	model.ready = true
+	model.editorVisible = true
 	_ = model.applyLayout()
 	_ = model.toggleZoomForRegion(paneRegionEditor)
 	initial := model.editor.Width()
@@ -990,6 +996,7 @@ func TestResponsePaneFocusChord(t *testing.T) {
 func TestMainSplitOrientationChord(t *testing.T) {
 	model := New(Config{})
 	model.ready = true
+	model.editorVisible = true
 	model.width = 160
 	model.height = 48
 	if cmd := model.applyLayout(); cmd != nil {

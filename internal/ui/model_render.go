@@ -89,52 +89,59 @@ func (m Model) View() string {
 
 	filePane := m.renderFilePane()
 	fileWidth := lipgloss.Width(filePane)
-	editorPane := m.renderEditorPane()
-	editorWidth := lipgloss.Width(editorPane)
 
 	var panes string
-	if m.mainSplitOrientation == mainSplitHorizontal {
-		availableRight := m.width - fileWidth
-		if availableRight < 0 {
-			availableRight = 0
-		}
-		rightWidth := editorWidth
-		if availableRight > rightWidth {
-			rightWidth = availableRight
-		}
-		responsePane := m.renderResponsePane(rightWidth)
-		rightColumn := lipgloss.JoinVertical(lipgloss.Left, editorPane, responsePane)
-		panes = lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			filePane,
-			rightColumn,
-		)
+	if !m.editorVisible {
+		responseWidth := m.width - fileWidth
+		responsePane := m.renderResponsePane(responseWidth)
+		panes = lipgloss.JoinHorizontal(lipgloss.Top, filePane, responsePane)
 	} else {
-		pw := m.responseTargetWidth(fileWidth, editorWidth)
-		var responsePane string
-		if pw > 0 {
-			responsePane = m.renderResponsePane(pw)
-			rw := lipgloss.Width(responsePane)
-			ex := fileWidth + editorWidth + rw - m.width
-			if ex > 0 {
-				adj := pw - ex
-				if adj > 0 {
-					responsePane = m.renderResponsePane(adj)
-					rw = lipgloss.Width(responsePane)
-					if fileWidth+editorWidth+rw > m.width {
+		editorPane := m.renderEditorPane()
+		editorWidth := lipgloss.Width(editorPane)
+
+		if m.mainSplitOrientation == mainSplitHorizontal {
+			availableRight := m.width - fileWidth
+			if availableRight < 0 {
+				availableRight = 0
+			}
+			rightWidth := editorWidth
+			if availableRight > rightWidth {
+				rightWidth = availableRight
+			}
+			responsePane := m.renderResponsePane(rightWidth)
+			rightColumn := lipgloss.JoinVertical(lipgloss.Left, editorPane, responsePane)
+			panes = lipgloss.JoinHorizontal(
+				lipgloss.Top,
+				filePane,
+				rightColumn,
+			)
+		} else {
+			pw := m.responseTargetWidth(fileWidth, editorWidth)
+			var responsePane string
+			if pw > 0 {
+				responsePane = m.renderResponsePane(pw)
+				rw := lipgloss.Width(responsePane)
+				ex := fileWidth + editorWidth + rw - m.width
+				if ex > 0 {
+					adj := pw - ex
+					if adj > 0 {
+						responsePane = m.renderResponsePane(adj)
+						rw = lipgloss.Width(responsePane)
+						if fileWidth+editorWidth+rw > m.width {
+							responsePane = ""
+						}
+					} else {
 						responsePane = ""
 					}
-				} else {
-					responsePane = ""
 				}
 			}
+			panes = lipgloss.JoinHorizontal(
+				lipgloss.Top,
+				filePane,
+				editorPane,
+				responsePane,
+			)
 		}
-		panes = lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			filePane,
-			editorPane,
-			responsePane,
-		)
 	}
 	body := lipgloss.JoinVertical(
 		lipgloss.Left,

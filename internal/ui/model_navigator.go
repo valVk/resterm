@@ -375,6 +375,9 @@ func samePath(a, b string) bool {
 
 // syncNavigatorWithEditorCursor updates the navigator selection to match the request at the current cursor position
 func (m *Model) syncNavigatorWithEditorCursor() {
+	if !m.editorVisible {
+		return
+	}
 	if m.navigator == nil || m.doc == nil || m.currentFile == "" {
 		return
 	}

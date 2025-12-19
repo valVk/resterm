@@ -99,9 +99,45 @@ func (m *Model) updateNavigator(msg tea.Msg) tea.Cmd {
 					m.navigator.Refresh()
 				}
 			} else if n != nil && (n.Kind == navigator.KindRequest || n.Kind == navigator.KindWorkflow) {
-				// Jump to editor when right/l is pressed on a request or workflow
-				m.setFocus(focusEditor)
-				return nil
+				wasHidden := !m.editorVisible
+				if wasHidden {
+					m.editorVisible = true
+				}
+				if n.Kind == navigator.KindRequest {
+					req, _, cmds, ok := m.prepareNavigatorRequest()
+					if ok {
+						m.jumpToNavigatorRequest(req, true)
+						var allCmds []tea.Cmd
+						if wasHidden {
+							allCmds = append(allCmds, m.applyLayout())
+						}
+						if len(cmds) > 0 {
+							allCmds = append(allCmds, cmds...)
+						}
+						m.setFocus(focusEditor)
+						if len(allCmds) > 0 {
+							return tea.Batch(allCmds...)
+						}
+						return nil
+					}
+				} else if n.Kind == navigator.KindWorkflow {
+					wf, _, cmds, ok := m.prepareNavigatorWorkflow()
+					if ok {
+						m.revealWorkflowInEditor(wf)
+						var allCmds []tea.Cmd
+						if wasHidden {
+							allCmds = append(allCmds, m.applyLayout())
+						}
+						if len(cmds) > 0 {
+							allCmds = append(allCmds, cmds...)
+						}
+						m.setFocus(focusEditor)
+						if len(allCmds) > 0 {
+							return tea.Batch(allCmds...)
+						}
+						return nil
+					}
+				}
 			} else {
 				m.navigator.ToggleExpanded()
 			}
@@ -129,7 +165,24 @@ func (m *Model) updateNavigator(msg tea.Msg) tea.Cmd {
 					n.Expanded = true
 					m.navigator.Refresh()
 				}
-
+			} else if n.Kind == navigator.KindRequest || n.Kind == navigator.KindWorkflow {
+				if n.Kind == navigator.KindRequest {
+					req, _, cmds, ok := m.prepareNavigatorRequest()
+					if ok {
+						m.jumpToNavigatorRequest(req, true)
+						if len(cmds) > 0 {
+							return applyFilter(tea.Batch(cmds...))
+						}
+					}
+				} else if n.Kind == navigator.KindWorkflow {
+					wf, _, cmds, ok := m.prepareNavigatorWorkflow()
+					if ok {
+						m.revealWorkflowInEditor(wf)
+						if len(cmds) > 0 {
+							return applyFilter(tea.Batch(cmds...))
+						}
+					}
+				}
 			}
 		case " ":
 			n := m.navigator.Selected()
@@ -173,20 +226,49 @@ func (m *Model) updateNavigator(msg tea.Msg) tea.Cmd {
 			} else {
 				m.navigator.ClearTagFilters()
 			}
-		case "r":
-			req, _, cmds, ok := m.prepareNavigatorRequest()
-			if !ok {
-				if len(cmds) == 0 {
-					return applyFilter(nil)
+		case "r", "e":
+			n := m.navigator.Selected()
+			if n != nil && (n.Kind == navigator.KindRequest || n.Kind == navigator.KindWorkflow) {
+				wasHidden := !m.editorVisible
+				if wasHidden {
+					m.editorVisible = true
 				}
-				return applyFilter(tea.Batch(cmds...))
+				if n.Kind == navigator.KindRequest {
+					req, _, cmds, ok := m.prepareNavigatorRequest()
+					if ok {
+						m.jumpToNavigatorRequest(req, true)
+						var allCmds []tea.Cmd
+						if wasHidden {
+							allCmds = append(allCmds, m.applyLayout())
+						}
+						if len(cmds) > 0 {
+							allCmds = append(allCmds, cmds...)
+						}
+						m.setFocus(focusEditor)
+						if len(allCmds) > 0 {
+							return tea.Batch(allCmds...)
+						}
+						return nil
+					}
+				} else if n.Kind == navigator.KindWorkflow {
+					wf, _, cmds, ok := m.prepareNavigatorWorkflow()
+					if ok {
+						m.revealWorkflowInEditor(wf)
+						var allCmds []tea.Cmd
+						if wasHidden {
+							allCmds = append(allCmds, m.applyLayout())
+						}
+						if len(cmds) > 0 {
+							allCmds = append(allCmds, cmds...)
+						}
+						m.setFocus(focusEditor)
+						if len(allCmds) > 0 {
+							return tea.Batch(allCmds...)
+						}
+						return nil
+					}
+				}
 			}
-			m.jumpToNavigatorRequest(req, true)
-			m.setFocus(focusEditor)
-			if len(cmds) > 0 {
-				return applyFilter(tea.Batch(cmds...))
-			}
-			return applyFilter(nil)
 		}
 	}
 

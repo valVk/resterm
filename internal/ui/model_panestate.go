@@ -117,6 +117,10 @@ func (m *Model) collapsedStatusLabel(r paneRegion) string {
 }
 
 func (m *Model) togglePaneCollapse(r paneRegion) tea.Cmd {
+	if r == paneRegionEditor && !m.editorVisible {
+		m.setStatusMessage(statusMsg{text: "Editor is hidden", level: statusInfo})
+		return nil
+	}
 	current := m.collapseState(r)
 	res := m.setCollapseState(r, !current)
 	if res.blocked {
@@ -138,6 +142,10 @@ func (m *Model) togglePaneCollapse(r paneRegion) tea.Cmd {
 }
 
 func (m *Model) toggleZoomForRegion(r paneRegion) tea.Cmd {
+	if r == paneRegionEditor && !m.editorVisible {
+		m.setStatusMessage(statusMsg{text: "Editor is hidden", level: statusInfo})
+		return nil
+	}
 	if r == paneRegionSidebar {
 		m.setStatusMessage(statusMsg{text: "Requests pane cannot be zoomed", level: statusWarn})
 		return nil

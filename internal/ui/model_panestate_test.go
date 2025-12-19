@@ -33,6 +33,7 @@ func TestToggleZoomForRegionTogglesState(t *testing.T) {
 	model.width = 140
 	model.height = 50
 	model.ready = true
+	model.editorVisible = true
 	_ = model.applyLayout()
 	_ = model.toggleZoomForRegion(paneRegionEditor)
 	if !model.zoomActive || model.zoomRegion != paneRegionEditor {
