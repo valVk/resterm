@@ -49,6 +49,7 @@ TL;DR why resterm:
 - Everything lives in plain files (.http/.rest) - **no cloud or account - everything stays local**.
 - **Built-in SSH tunnels** for HTTP/gRPC/WebSocket/SSE.
 - **OAuth 2.0 built-in** - client credentials, password grant, authorization code + PKCE with automatic browser flow and token refresh.
+- **Scripting** to modify/assert requests, capture or reuse tokens and check or modify responses/streams.
 - Fast iteration loop with _explorer_ + _history_ + _diff/compare_ + _captures/workflows_.
 - **Debuggable** - timeline tracing, profiler, streaming transcripts and inline scripts/tests.
 
@@ -78,7 +79,9 @@ TL;DR why resterm:
 ## Features
 - **Workspace** navigator that filters `.http` / `.rest` files, supports recursion and keeps request lists in sync as you edit.
 - **Editor** with inline syntax highlighting, search (`Ctrl+F`), clipboard motions, and inline metadata completions (type `@` for contextual hints).
-- **Variable** scopes with `@global` (environment-wide), `@var file` (document), `@var request` (per-call), plus compile-time constants (`@const`), captures, JavaScript hooks, and multi-step workflows with per-step expectations and overrides.
+- **Variables** with `@global` (environment-wide), `@var file` (document), `@var request` (per-call), plus compile-time constants (`@const`) and captures to stash secrets or derived values where you need them.
+- **Scripting** via pre-request/test JavaScript hooks (ES5.1) to rewrite URLs/headers/bodies, seed tokens, and assert HTTP or streaming responses inline or via js files.
+- **Workflows** compose several named requests (`@workflow` + `@step`) with shared `vars.workflow.*`, per step expectations and overrides.
 - **GraphQL** helpers (`@graphql`, `@variables`, `@query`) and gRPC directives (`@grpc`, `@grpc-descriptor`, reflection, metadata).
 - **WebSockets and SSE** with scripted `@ws` steps, automatic transcripts and an interactive console for ad-hoc frames.
 - **OpenAPI importer** converts OpenAPI specs into Resterm-ready `.http` collections from the CLI.
@@ -88,7 +91,6 @@ TL;DR why resterm:
 - **OAuth 2.0** with automatic token management - client credentials, password grant, and authorization code + PKCE. Tokens are cached per environment, refreshed automatically, and injected into requests without manual steps.
 - **Latency** with `@profile` to benchmark endpoints and render histograms right inside the TUI.
 - **Tracing and Timeline** with `@trace` to enable request tracing.
-- **Multi-step workflows** compose several named requests (`@workflow` + `@step`) with per-step overrides and expectations.
 - **Multi-environment compare** via `@compare` directives or the global `--compare` flag.
 - **SSH tunnels** route HTTP/gRPC/WebSocket/SSE traffic through bastions with host key verification, keep-alives, retries, and persistent tunnels.
 - **File Watcher** with automatic file change detection: Resterm warns when the current file changes or goes missing on disk and lets you reload from disk (`g Shift+R`) or keep your buffer, plus a shortcut for quick workspace rescan (files) (`g Shift+O`).
@@ -318,7 +320,8 @@ If you copied the command from a shell, prefixes like `sudo` or `$` are ignored 
 
 - **OAuth 2.0:** Full OAuth support with three grant types - client credentials for service-to-service calls, password grant for legacy systems, and authorization code + PKCE for user login flows. For auth code flows, Resterm opens your system browser, spins up a local callback server on `127.0.0.1`, captures the redirect and exchanges the code automatically. Tokens are cached per environment and refreshed when they expire. Docs: [`docs/resterm.md#oauth-20-directive`](./docs/resterm.md#oauth-20-directive) and `_examples/oauth2.http`.
 - **SSH jumps/tunnels:** Route HTTP/gRPC/WebSocket/SSE through bastions with `@ssh` profiles (persist/keepalive/host-key/retries). Docs: [`docs/resterm.md#ssh-jumps`](./docs/resterm.md#ssh-tunnels) and `_examples/ssh.http`.
-- **Workflows & scripting:** Chain requests with `@workflow`/`@step`, pass data between steps, and add lightweight JS hooks. Docs + sample: [`docs/resterm.md#workflows-multi-step-workflows`](./docs/resterm.md#workflows-multi-step-workflows) and `_examples/workflows.http`.
+- **Scripting:** Pre-request/test JavaScript (Goja, ES5.1) to reshape URLs/headers/bodies, seed tokens, and assert HTTP or streaming responses (inline or via seeded .js files). Docs + sample: [`docs/resterm.md#scripting-api`](./docs/resterm.md#scripting-api) and `_examples/scripts.http`.
+- **Workflows:** Chain requests with `@workflow`/`@step`, share `vars.workflow.*`, and attach per-step expectations or overrides. Docs + sample: [`docs/resterm.md#workflows-multi-step-workflows`](./docs/resterm.md#workflows-multi-step-workflows) and `_examples/workflows.http`.
 - **Compare runs:** Run the same request across environments with `@compare` or `--compare`, then diff responses side by side (`g+c`). Docs: [`docs/resterm.md#compare-runs`](./docs/resterm.md#compare-runs).
 - **Tracing & timeline:** Add `@trace` with budgets to capture DNS/connect/TLS/TTFB/transfer timings, visualize overruns, and optionally export spans to OpenTelemetry. Docs: [`docs/resterm.md#timeline--tracing`](./docs/resterm.md#timeline--tracing).
 - **Streaming (WebSocket & SSE):** Use `@websocket` + `@ws` steps or `@sse` to script and record streams. The Stream tab keeps transcripts and an interactive console. Docs: [`docs/resterm.md#streaming-sse--websocket`](./docs/resterm.md#streaming-sse--websocket).
