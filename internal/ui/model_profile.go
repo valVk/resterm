@@ -112,11 +112,26 @@ func (m *Model) startProfileRun(doc *restfile.Document, req *restfile.Request, o
 	m.statusPulseFrame = 0
 
 	m.setStatusMessage(statusMsg{text: fmt.Sprintf("%s warmup 0/%d", state.messageBase, state.warmup), level: statusInfo})
+
+	var batchCmds []tea.Cmd
 	execCmd := m.executeProfileIteration()
-	if tick := m.startStatusPulse(); tick != nil {
-		return tea.Batch(execCmd, tick)
+	batchCmds = append(batchCmds, execCmd)
+
+	// Extension OnRequestStart hook
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+		if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+			batchCmds = append(batchCmds, cmd)
+		}
 	}
-	return execCmd
+
+	if tick := m.startStatusPulse(); tick != nil {
+		batchCmds = append(batchCmds, tick)
+	}
+
+	if len(batchCmds) > 0 {
+		return tea.Batch(batchCmds...)
+	}
+	return nil
 }
 
 func (m *Model) executeProfileIteration() tea.Cmd {
@@ -229,17 +244,44 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 		m.setStatusMessage(statusMsg{text: progressText, level: statusInfo})
 		m.sending = true
 		if state.delay > 0 {
+			var delayCmds []tea.Cmd
 			next := tea.Tick(state.delay, func(time.Time) tea.Msg { return profileNextIterationMsg{} })
-			if tick := m.startStatusPulse(); tick != nil {
-				return tea.Batch(next, tick)
+			delayCmds = append(delayCmds, next)
+
+			// Extension OnRequestStart hook
+			if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+				if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+					delayCmds = append(delayCmds, cmd)
+				}
 			}
-			return next
+
+			if tick := m.startStatusPulse(); tick != nil {
+				delayCmds = append(delayCmds, tick)
+			}
+			if len(delayCmds) > 0 {
+				return tea.Batch(delayCmds...)
+			}
+			return nil
 		}
+
+		var execCmds []tea.Cmd
 		exec := m.executeProfileIteration()
-		if tick := m.startStatusPulse(); tick != nil {
-			return tea.Batch(exec, tick)
+		execCmds = append(execCmds, exec)
+
+		// Extension OnRequestStart hook
+		if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+			if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+				execCmds = append(execCmds, cmd)
+			}
 		}
-		return exec
+
+		if tick := m.startStatusPulse(); tick != nil {
+			execCmds = append(execCmds, tick)
+		}
+		if len(execCmds) > 0 {
+			return tea.Batch(execCmds...)
+		}
+		return nil
 	}
 
 	return m.finalizeProfileRun(msg, state)

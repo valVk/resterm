@@ -1767,6 +1767,12 @@ func (m Model) renderStatusBar() string {
 		segments = append(segments, fmt.Sprintf("Zoom: %s", m.collapsedStatusLabel(m.zoomRegion)))
 	}
 
+	// Extension StatusBarExtras hook
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.StatusBarExtras != nil {
+		extras := ext.Hooks.StatusBarExtras(&m)
+		segments = append(segments, extras...)
+	}
+
 	staticText := strings.Join(segments, sep)
 	staticWidth := lipgloss.Width(staticText)
 	if staticWidth > 0 {

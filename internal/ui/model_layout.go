@@ -261,7 +261,8 @@ func (m *Model) applyLayout() tea.Cmd {
 
 	if m.mainSplitOrientation == mainSplitVertical && remaining > 0 &&
 		!m.collapseState(paneRegionEditor) &&
-		!m.collapseState(paneRegionResponse) && !m.zoomActive {
+		!m.collapseState(paneRegionResponse) && !m.zoomActive &&
+		editorWidth > 0 {
 		realEditorRatio := float64(editorWidth) / float64(remaining)
 		if realEditorRatio < minEditorSplit {
 			realEditorRatio = minEditorSplit

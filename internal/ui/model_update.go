@@ -32,6 +32,13 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
+	// Extension OnUpdate hook
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnUpdate != nil {
+		if cmd := ext.Hooks.OnUpdate(&m, msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
 	switch typed := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.frameWidth = typed.Width
@@ -53,8 +60,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyMsg:
 		if !m.showSearchPrompt && !m.showEnvSelector && !m.showFileChangeModal {
-			if cmd := m.handleKey(typed); cmd != nil {
-				cmds = append(cmds, cmd)
+			// Extension HandleCustomKey hook
+			handled := false
+			if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.HandleCustomKey != nil {
+				var hookCmd tea.Cmd
+				handled, hookCmd = ext.Hooks.HandleCustomKey(&m, typed.String())
+				if hookCmd != nil {
+					cmds = append(cmds, hookCmd)
+				}
+			}
+
+			// Only call standard key handler if extension didn't handle it
+			if !handled {
+				if cmd := m.handleKey(typed); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 			}
 		}
 	case responseMsg:

@@ -363,6 +363,7 @@ type Model struct {
 	requestSessions    map[*restfile.Request]string
 	sessionRequests    map[string]*restfile.Request
 	requestKeySessions map[string]string
+  extensions interface{}
 }
 
 type navDocCache struct {
@@ -661,6 +662,11 @@ func New(cfg Config) Model {
 	model.applyThemeToLists()
 	if strings.TrimSpace(model.workspaceRoot) != "" && strings.TrimSpace(model.lastResponseSaveDir) == "" {
 		model.lastResponseSaveDir = model.workspaceRoot
+	}
+
+	// Call extension OnModelInit hook
+	if ext := model.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnModelInit != nil {
+		ext.Hooks.OnModelInit(&model)
 	}
 
 	return model

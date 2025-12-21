@@ -110,6 +110,14 @@ func (m *Model) startCompareRun(doc *restfile.Document, req *restfile.Request, s
 			cmds = append(cmds, cmd)
 		}
 	}
+
+	// Extension OnRequestStart hook
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+		if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
 	if cmd := m.executeCompareIteration(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -145,10 +153,24 @@ func (m *Model) executeCompareIteration() tea.Cmd {
 		return m.executeRequest(state.doc, clone, state.options, env)
 	})
 
-	if tick := m.startStatusPulse(); tick != nil {
-		return tea.Batch(runCmd, tick)
+	var batchCmds []tea.Cmd
+	batchCmds = append(batchCmds, runCmd)
+
+	// Extension OnRequestStart hook
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+		if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+			batchCmds = append(batchCmds, cmd)
+		}
 	}
-	return runCmd
+
+	if tick := m.startStatusPulse(); tick != nil {
+		batchCmds = append(batchCmds, tick)
+	}
+
+	if len(batchCmds) > 0 {
+		return tea.Batch(batchCmds...)
+	}
+	return nil
 }
 
 // Snapshot each iteration immediately so the compare tab and diff panes can
