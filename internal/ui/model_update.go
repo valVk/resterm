@@ -781,7 +781,9 @@ func (m *Model) sendNavigatorRequest(execute bool) tea.Cmd {
 		return tea.Batch(cmds...)
 	}
 	m.jumpToNavigatorRequest(req, false)
-	m.setFocus(focusRequests)
+	if cmd := m.setFocus(focusRequests); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if cmd := m.sendRequestFromList(execute); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -834,7 +836,9 @@ func (m *Model) sendNavigatorWorkflow() tea.Cmd {
 		}
 		return tea.Batch(cmds...)
 	}
-	m.setFocus(focusWorkflows)
+	if cmd := m.setFocus(focusWorkflows); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if cmd := m.runSelectedWorkflow(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -869,21 +873,21 @@ func (m *Model) runShortcutBinding(binding bindings.Binding, msg tea.KeyMsg) (te
 			return nil, true
 		}
 		prev := m.focus
-		m.cycleFocus(true)
+		cmd := m.cycleFocus(true)
 		if prev == focusEditor || m.focus == focusEditor {
 			m.suppressEditorKey = true
 		}
-		return nil, true
+		return cmd, true
 	case bindings.ActionCycleFocusPrev:
 		if m.focus == focusEditor && m.editorInsertMode {
 			return nil, true
 		}
 		prev := m.focus
-		m.cycleFocus(false)
+		cmd := m.cycleFocus(false)
 		if prev == focusEditor || m.focus == focusEditor {
 			m.suppressEditorKey = true
 		}
-		return nil, true
+		return cmd, true
 	case bindings.ActionOpenEnvSelector:
 		if len(m.cfg.EnvironmentSet) == 0 {
 			return func() tea.Msg {
@@ -969,15 +973,14 @@ func (m *Model) runShortcutBinding(binding bindings.Binding, msg tea.KeyMsg) (te
 	case bindings.ActionWorkflowHeightDecrease:
 		return m.runWorkflowResize(-workflowSplitStep), true
 	case bindings.ActionFocusRequests:
-		m.setFocus(focusRequests)
-		return nil, true
+		return m.setFocus(focusRequests), true
 	case bindings.ActionFocusResponse:
-		m.setFocus(focusResponse)
-		return nil, true
+		return m.setFocus(focusResponse), true
 	case bindings.ActionFocusEditorNormal:
-		m.setFocus(focusEditor)
-		m.setInsertMode(false, true)
-		return nil, true
+		return batchCommands(
+			m.setFocus(focusEditor),
+			m.setInsertMode(false, true),
+		), true
 	case bindings.ActionSetMainSplitHorizontal:
 		return m.setMainSplitOrientation(mainSplitHorizontal), true
 	case bindings.ActionSetMainSplitVertical:
@@ -1270,10 +1273,13 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 				m.suppressEditorKey = true
 				return combine(cmd)
 			case "c":
-				changeCmd := m.runChangeCurrentLine()
-				insertCmd := m.setInsertMode(true, true)
+				// Adopt main's batchCommands pattern
+				cmd := batchCommands(
+					m.runChangeCurrentLine(),
+					m.setInsertMode(true, true),
+				)
 				m.suppressEditorKey = true
-				return combine(tea.Batch(changeCmd, insertCmd))
+				return combine(cmd)
 			case "P":
 				cmd := m.runPasteClipboard(false)
 				m.suppressEditorKey = true
@@ -1326,9 +1332,9 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 		} else {
 			switch keyStr {
 			case "esc":
-				m.setInsertMode(false, true)
+				cmd := m.setInsertMode(false, true)
 				m.suppressEditorKey = true
-				return combine(nil)
+				return combine(cmd)
 			}
 		}
 		if m.shouldSendEditorRequest(msg, m.editorInsertMode) {

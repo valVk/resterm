@@ -229,6 +229,7 @@ func (m *Model) updateNavigator(msg tea.Msg) tea.Cmd {
 		case "r", "e":
 			n := m.navigator.Selected()
 			if n != nil && (n.Kind == navigator.KindRequest || n.Kind == navigator.KindWorkflow) {
+				// Keep our editor visibility feature
 				wasHidden := !m.editorVisible
 				if wasHidden {
 					m.editorVisible = true
