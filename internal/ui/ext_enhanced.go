@@ -6,18 +6,18 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// EnhancedExtensionData holds all enhanced UI state for the extensions.
+// enhancedData holds all enhanced UI state for the extensions.
 // This keeps enhanced data separate from the core Model struct.
-type EnhancedExtensionData struct {
+type enhancedData struct {
 	editorVisible        bool
 	requestSpinner       spinner.Model
 	lastEditorCursorLine int
 }
 
-// InstallEnhancedExtensions sets up all enhanced UI features.
-// Call this from main or CLI initialization code to enable enhanced features.
-func InstallEnhancedExtensions(m *Model) {
-	data := &EnhancedExtensionData{
+// InstallEnhanced sets up all enhanced UI features.
+// Call this from main after creating the model to enable enhanced features.
+func InstallEnhanced(m *Model) {
+	data := &enhancedData{
 		editorVisible:  false,
 		requestSpinner: createRequestSpinner(),
 	}
@@ -48,12 +48,12 @@ func createRequestSpinner() spinner.Model {
 }
 
 // getEnhancedData safely retrieves the enhanced extension data from the model.
-func getEnhancedData(m *Model) *EnhancedExtensionData {
+func getEnhancedData(m *Model) *enhancedData {
 	ext := m.GetExtensions()
 	if ext == nil || ext.Data == nil {
 		return nil
 	}
-	data, ok := ext.Data.(*EnhancedExtensionData)
+	data, ok := ext.Data.(*enhancedData)
 	if !ok {
 		return nil
 	}
@@ -63,7 +63,7 @@ func getEnhancedData(m *Model) *EnhancedExtensionData {
 // onModelInit is called after the model is created.
 func onModelInit(m *Model) {
 	// Any initialization logic can go here
-	// Currently the data is already initialized in InstallEnhancedExtensions
+	// Currently the data is already initialized in InstallEnhanced
 }
 
 // onUpdate handles spinner animation during request execution.

@@ -365,7 +365,7 @@ func main() {
 	})
 
 	// Install enhanced UI extensions (spinner, editor visibility, etc.)
-	ui.InstallEnhancedExtensions(&model)
+	ui.InstallEnhanced(&model)
 
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
