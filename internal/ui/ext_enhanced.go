@@ -131,8 +131,18 @@ func handleCustomKey(m *Model, key string) (bool, tea.Cmd) {
 		// 'q' = quit/hide editor (collapse it using the existing collapse system)
 		// Only when editor is focused
 		if m.focus == focusEditor && !m.collapseState(paneRegionEditor) {
-			// Editor is visible and focused, so collapse it
-			return true, m.togglePaneCollapse(paneRegionEditor)
+			// Editor is visible and focused, so collapse it and move focus to requests
+			var cmds []tea.Cmd
+			if cmd := m.togglePaneCollapse(paneRegionEditor); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			if cmd := m.setFocus(focusRequests); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			if len(cmds) > 0 {
+				return true, tea.Batch(cmds...)
+			}
+			return true, nil
 		}
 	}
 
