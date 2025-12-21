@@ -114,7 +114,15 @@ func (m *Model) startProfileRun(doc *restfile.Document, req *restfile.Request, o
 	m.setStatusMessage(statusMsg{text: fmt.Sprintf("%s warmup 0/%d", state.messageBase, state.warmup), level: statusInfo})
 	execCmd := m.executeProfileIteration()
 	var batchCmds []tea.Cmd
-	batchCmds = append(batchCmds, execCmd, m.requestSpinner.Tick)
+	batchCmds = append(batchCmds, execCmd)
+
+	// Call extension hook for request start
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+		if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+			batchCmds = append(batchCmds, cmd)
+		}
+	}
+
 	if tick := m.startStatusPulse(); tick != nil {
 		batchCmds = append(batchCmds, tick)
 	}
@@ -233,7 +241,15 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 		if state.delay > 0 {
 			next := tea.Tick(state.delay, func(time.Time) tea.Msg { return profileNextIterationMsg{} })
 			var batchCmds []tea.Cmd
-			batchCmds = append(batchCmds, next, m.requestSpinner.Tick)
+			batchCmds = append(batchCmds, next)
+
+			// Call extension hook for request start
+			if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+				if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+					batchCmds = append(batchCmds, cmd)
+				}
+			}
+
 			if tick := m.startStatusPulse(); tick != nil {
 				batchCmds = append(batchCmds, tick)
 			}
@@ -241,7 +257,15 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 		}
 		exec := m.executeProfileIteration()
 		var batchCmds []tea.Cmd
-		batchCmds = append(batchCmds, exec, m.requestSpinner.Tick)
+		batchCmds = append(batchCmds, exec)
+
+		// Call extension hook for request start
+		if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+			if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+				batchCmds = append(batchCmds, cmd)
+			}
+		}
+
 		if tick := m.startStatusPulse(); tick != nil {
 			batchCmds = append(batchCmds, tick)
 		}

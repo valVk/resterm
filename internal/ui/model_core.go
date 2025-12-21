@@ -10,11 +10,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/unkn0wn-root/resterm/internal/bindings"
 	"github.com/unkn0wn-root/resterm/internal/config"
@@ -206,7 +204,6 @@ type Model struct {
 	responseSplitOrientation responseSplitOrientation
 	responsePaneFocus        responsePaneID
 	responsePaneChord        bool
-	editorVisible            bool
 	sidebarCollapsed         bool
 	editorCollapsed          bool
 	responseCollapsed        bool
@@ -322,7 +319,6 @@ type Model struct {
 	dirty                  bool
 	sending                bool
 	sendCancel             context.CancelFunc
-	requestSpinner         spinner.Model
 	suppressEditorKey      bool
 	editorInsertMode       bool
 	editorWriteKeyMap      textarea.KeyMap
@@ -355,7 +351,6 @@ type Model struct {
 	activeRequestTitle string
 	activeRequestKey   string
 	activeWorkflowKey  string
-	lastEditorCursorLine int
 
 	streamMgr          *stream.Manager
 	streamMsgChan      chan tea.Msg
@@ -370,6 +365,10 @@ type Model struct {
 	requestSessions    map[*restfile.Request]string
 	sessionRequests    map[string]*restfile.Request
 	requestKeySessions map[string]string
+
+	// Extensions allow custom functionality without modifying core code.
+	// See model_extensions.go for the extension API.
+	extensions interface{}
 }
 
 type navDocCache struct {
@@ -621,11 +620,9 @@ func New(cfg Config) Model {
 		updateClient:             cfg.UpdateClient,
 		updateVersion:            updateVersion,
 		updateEnabled:            updateEnabled,
-		editorVisible:            false,
 		editorInsertMode:         false,
 		editorWriteKeyMap:        writeKeyMap,
 		editorViewKeyMap:         viewKeyMap,
-		requestSpinner:           createRequestSpinner(),
 		newFileInput:             newFileInput,
 		openPathInput:            openPathInput,
 		responseSaveInput:        responseSaveInput,
@@ -671,12 +668,10 @@ func New(cfg Config) Model {
 		model.lastResponseSaveDir = model.workspaceRoot
 	}
 
-	return model
-}
+	// Call extension initialization hook if extensions are installed
+	if ext := model.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnModelInit != nil {
+		ext.Hooks.OnModelInit(&model)
+	}
 
-func createRequestSpinner() spinner.Model {
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	return s
+	return model
 }

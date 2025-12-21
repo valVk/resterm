@@ -32,11 +32,11 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	// Update spinner if request is in progress
-	if m.sending {
-		var cmd tea.Cmd
-		m.requestSpinner, cmd = m.requestSpinner.Update(msg)
-		cmds = append(cmds, cmd)
+	// Call extension update hook
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnUpdate != nil {
+		if cmd := ext.Hooks.OnUpdate(&m, msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	switch typed := msg.(type) {
@@ -1236,8 +1236,8 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 				m.suppressEditorKey = true
 				return combine(cmd)
 			case "q":
-				if m.editorVisible {
-					m.editorVisible = false
+				if IsEditorVisible(m) {
+					SetEditorVisible(m, false)
 					m.setFocus(focusRequests)
 					m.suppressEditorKey = true
 					return combine(m.applyLayout())

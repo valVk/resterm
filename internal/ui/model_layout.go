@@ -122,13 +122,23 @@ func (m *Model) applyLayout() tea.Cmd {
 	var editorWidth, responseWidth int
 	var editorHeight int
 
-	if !m.editorVisible {
-		editorWidth = 0
-		editorHeight = 0
-		responseWidth = remaining
-		m.editorContentHeight = 0
-		m.responseContentHeight = paneHeight
-	} else {
+	// Check if extension wants to customize layout
+	customLayoutApplied := false
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.CustomLayoutAdjust != nil {
+		if w, h, override := ext.Hooks.CustomLayoutAdjust(m, remaining, paneHeight); override {
+			editorWidth = w
+			editorHeight = h
+			responseWidth = remaining
+			if w == 0 {
+				// Editor hidden
+				m.editorContentHeight = 0
+				m.responseContentHeight = paneHeight
+			}
+			customLayoutApplied = true
+		}
+	}
+
+	if !customLayoutApplied {
 		if m.mainSplitOrientation == mainSplitHorizontal {
 			editorWidth = remaining
 			responseWidth = remaining
@@ -268,7 +278,7 @@ func (m *Model) applyLayout() tea.Cmd {
 			m.editorContentHeight, m.responseContentHeight = redistributeCollapsedHeights(m.editorContentHeight, m.responseContentHeight, editorCollapsed, responseCollapsed)
 			editorHeight = m.editorContentHeight
 		}
-	}
+	} // end if !customLayoutApplied
 
 	if editorWidth < 0 {
 		editorWidth = 0
@@ -301,8 +311,10 @@ func (m *Model) applyLayout() tea.Cmd {
 	m.requestList.SetSize(listWidth, 0)
 	m.workflowList.SetSize(listWidth, 0)
 
+	// Only save editor ratio when editor is actually visible (not hidden by extensions)
+	editorActuallyVisible := editorWidth > 0
 	if m.mainSplitOrientation == mainSplitVertical && remaining > 0 &&
-		m.editorVisible &&
+		editorActuallyVisible &&
 		!m.collapseState(paneRegionEditor) &&
 		!m.collapseState(paneRegionResponse) && !m.zoomActive {
 		realEditorRatio := float64(editorWidth) / float64(remaining)

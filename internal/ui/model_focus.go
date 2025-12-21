@@ -6,11 +6,17 @@ import (
 )
 
 func (m *Model) cycleFocus(forward bool) tea.Cmd {
+	// Check if extension wants to skip editor
+	shouldSkip := false
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.ShouldSkipEditor != nil {
+		shouldSkip = ext.Hooks.ShouldSkipEditor(m)
+	}
+
 	switch m.focus {
 	case focusFile, focusRequests, focusWorkflows:
 		if forward {
-			// Skip editor if hidden
-			if !m.editorVisible {
+			// Skip editor if extension says so
+			if shouldSkip {
 				return m.setFocus(focusResponse)
 			}
 			return m.setFocus(focusEditor)
@@ -27,8 +33,8 @@ func (m *Model) cycleFocus(forward bool) tea.Cmd {
 		if forward {
 			return m.setFocus(focusRequests)
 		} else {
-			// Skip editor if hidden
-			if !m.editorVisible {
+			// Skip editor if extension says so
+			if shouldSkip {
 				return m.setFocus(focusRequests)
 			}
 			return m.setFocus(focusEditor)

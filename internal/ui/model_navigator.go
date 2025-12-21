@@ -375,7 +375,7 @@ func samePath(a, b string) bool {
 
 // syncNavigatorWithEditorCursor updates the navigator selection to match the request at the current cursor position
 func (m *Model) syncNavigatorWithEditorCursor() {
-	if !m.editorVisible {
+	if !IsEditorVisible(m) {
 		return
 	}
 	if m.navigator == nil || m.doc == nil || m.currentFile == "" {
@@ -384,11 +384,12 @@ func (m *Model) syncNavigatorWithEditorCursor() {
 
 	cursorLine := currentCursorLine(m.editor)
 
-	// Only update if cursor line has changed
-	if cursorLine == m.lastEditorCursorLine {
+	// Only update if cursor line has changed - tracked in extensions
+	lastLine := GetLastEditorCursorLine(m)
+	if cursorLine == lastLine {
 		return
 	}
-	m.lastEditorCursorLine = cursorLine
+	SetLastEditorCursorLine(m, cursorLine)
 
 	// Find the request at the cursor position
 	var req *restfile.Request

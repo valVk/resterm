@@ -101,7 +101,14 @@ func (m *Model) startCompareRun(doc *restfile.Document, req *restfile.Request, s
 	m.statusPulseFrame = -1
 
 	var cmds []tea.Cmd
-	cmds = append(cmds, m.requestSpinner.Tick)
+
+	// Call extension hook for request start
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+		if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
 	if !m.responseSplit {
 		targetOrientation := responseSplitHorizontal
 		if m.mainSplitOrientation == mainSplitHorizontal {
@@ -147,7 +154,15 @@ func (m *Model) executeCompareIteration() tea.Cmd {
 	})
 
 	var batchCmds []tea.Cmd
-	batchCmds = append(batchCmds, runCmd, m.requestSpinner.Tick)
+	batchCmds = append(batchCmds, runCmd)
+
+	// Call extension hook for request start
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+		if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+			batchCmds = append(batchCmds, cmd)
+		}
+	}
+
 	if tick := m.startStatusPulse(); tick != nil {
 		batchCmds = append(batchCmds, tick)
 	}

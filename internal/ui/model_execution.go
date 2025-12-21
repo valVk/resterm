@@ -217,9 +217,16 @@ func (m *Model) sendActiveRequest() tea.Cmd {
 	m.setStatusMessage(statusMsg{text: base, level: statusInfo})
 
 	execCmd := m.executeRequest(doc, cloned, options, "")
-	spinnerCmd := m.requestSpinner.Tick
 	var batchCmds []tea.Cmd
-	batchCmds = append(batchCmds, execCmd, spinnerCmd)
+	batchCmds = append(batchCmds, execCmd)
+
+	// Call extension hook for request start
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+		if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+			batchCmds = append(batchCmds, cmd)
+		}
+	}
+
 	if tick := m.startStatusPulse(); tick != nil {
 		batchCmds = append(batchCmds, tick)
 	}

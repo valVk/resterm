@@ -91,7 +91,7 @@ func (m Model) View() string {
 	fileWidth := lipgloss.Width(filePane)
 
 	var panes string
-	if !m.editorVisible {
+	if !IsEditorVisible(&m) {
 		responseWidth := m.width - fileWidth
 		responsePane := m.renderResponsePane(responseWidth)
 		panes = lipgloss.JoinHorizontal(lipgloss.Top, filePane, responsePane)
@@ -1751,10 +1751,10 @@ func (m Model) renderStatusBar() string {
 		segments = append(segments, "Unsaved changes")
 	}
 
-	// Show spinner when request is in progress
-	if m.sending {
-		spinnerText := m.requestSpinner.View() + " Sending request"
-		segments = append(segments, spinnerText)
+	// Call extension hook for status bar extras
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.StatusBarExtras != nil {
+		extras := ext.Hooks.StatusBarExtras(&m)
+		segments = append(segments, extras...)
 	}
 
 	staticText := strings.Join(segments, sep)

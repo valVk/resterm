@@ -175,7 +175,15 @@ func (m *Model) executeWorkflowStep() tea.Cmd {
 
 	cmd := m.executeRequest(state.doc, clone, options, "", extraVars)
 	var batchCmds []tea.Cmd
-	batchCmds = append(batchCmds, cmd, m.requestSpinner.Tick)
+	batchCmds = append(batchCmds, cmd)
+
+	// Call extension hook for request start
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+		if hookCmd := ext.Hooks.OnRequestStart(m); hookCmd != nil {
+			batchCmds = append(batchCmds, hookCmd)
+		}
+	}
+
 	if tick := m.startStatusPulse(); tick != nil {
 		batchCmds = append(batchCmds, tick)
 	}

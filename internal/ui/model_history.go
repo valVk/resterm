@@ -1655,7 +1655,18 @@ func (m *Model) loadHistorySelection(send bool) tea.Cmd {
 		replayText = fmt.Sprintf("Replaying %s", trimmed)
 	}
 	m.setStatusMessage(statusMsg{text: replayText, level: statusInfo})
-	return tea.Batch(m.executeRequest(doc, req, options, ""), m.requestSpinner.Tick)
+
+	var cmds []tea.Cmd
+	cmds = append(cmds, m.executeRequest(doc, req, options, ""))
+
+	// Call extension hook for request start
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
+		if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) presentHistoryEntry(entry history.Entry, req *restfile.Request) tea.Cmd {

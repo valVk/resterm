@@ -99,9 +99,9 @@ func (m *Model) updateNavigator(msg tea.Msg) tea.Cmd {
 					m.navigator.Refresh()
 				}
 			} else if n != nil && (n.Kind == navigator.KindRequest || n.Kind == navigator.KindWorkflow) {
-				wasHidden := !m.editorVisible
+				wasHidden := !IsEditorVisible(m)
 				if wasHidden {
-					m.editorVisible = true
+					SetEditorVisible(m, true)
 				}
 				if n.Kind == navigator.KindRequest {
 					req, _, cmds, ok := m.prepareNavigatorRequest()
@@ -227,48 +227,10 @@ func (m *Model) updateNavigator(msg tea.Msg) tea.Cmd {
 				m.navigator.ClearTagFilters()
 			}
 		case "r", "e":
+			// Handle editor visibility through extension (if installed)
 			n := m.navigator.Selected()
-			if n != nil && (n.Kind == navigator.KindRequest || n.Kind == navigator.KindWorkflow) {
-				// Keep our editor visibility feature
-				wasHidden := !m.editorVisible
-				if wasHidden {
-					m.editorVisible = true
-				}
-				if n.Kind == navigator.KindRequest {
-					req, _, cmds, ok := m.prepareNavigatorRequest()
-					if ok {
-						m.jumpToNavigatorRequest(req, true)
-						var allCmds []tea.Cmd
-						if wasHidden {
-							allCmds = append(allCmds, m.applyLayout())
-						}
-						if len(cmds) > 0 {
-							allCmds = append(allCmds, cmds...)
-						}
-						m.setFocus(focusEditor)
-						if len(allCmds) > 0 {
-							return tea.Batch(allCmds...)
-						}
-						return nil
-					}
-				} else if n.Kind == navigator.KindWorkflow {
-					wf, _, cmds, ok := m.prepareNavigatorWorkflow()
-					if ok {
-						m.revealWorkflowInEditor(wf)
-						var allCmds []tea.Cmd
-						if wasHidden {
-							allCmds = append(allCmds, m.applyLayout())
-						}
-						if len(cmds) > 0 {
-							allCmds = append(allCmds, cmds...)
-						}
-						m.setFocus(focusEditor)
-						if len(allCmds) > 0 {
-							return tea.Batch(allCmds...)
-						}
-						return nil
-					}
-				}
+			if extCmd := handleEditorVisibilityKeys(m, ev.String(), n); extCmd != nil {
+				return extCmd
 			}
 		}
 	}
