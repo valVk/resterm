@@ -364,6 +364,9 @@ func main() {
 		Bindings:            bindingMap,
 	})
 
+	// Install enhanced UI extensions (spinner, editor visibility, etc.)
+	ui.InstallEnhancedExtensions(&model)
+
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
 		handler := rtfmt.LogHandler(log.Printf, "program.Run() write failed: %v")
