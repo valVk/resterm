@@ -345,6 +345,11 @@ func (m *Model) syncNavigatorSelection() {
 		m.setActiveRequest(nil)
 		m.requestList.Select(-1)
 	}
+
+	// Extension OnNavigatorSelectionChange hook
+	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnNavigatorSelectionChange != nil {
+		ext.Hooks.OnNavigatorSelectionChange(m)
+	}
 }
 
 func (m *Model) syncNavigatorFocus(n *navigator.Node[any]) {

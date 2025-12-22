@@ -29,6 +29,10 @@ type ExtensionHooks struct {
 	// HandleCustomKey is called for each key press before standard handling.
 	// Return (true, cmd) if the key was handled, or (false, nil) to continue normal processing.
 	HandleCustomKey func(m *Model, key string) (handled bool, cmd tea.Cmd)
+
+	// OnNavigatorSelectionChange is called when the navigator selection changes.
+	// This allows extensions to react to navigation changes (e.g., scroll editor to show selected request).
+	OnNavigatorSelectionChange func(m *Model)
 }
 
 // Extensions holds custom extension data.

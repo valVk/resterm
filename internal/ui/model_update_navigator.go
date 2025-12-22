@@ -208,7 +208,7 @@ func (m *Model) updateNavigator(msg tea.Msg) tea.Cmd {
 			} else {
 				m.navigator.ClearTagFilters()
 			}
-		case "r":
+		case "r", "e":
 			res := m.navReqJumpCmd()
 			if res.ok {
 				return applyJump(res.cmd, res.focus)

@@ -23,11 +23,12 @@ func InstallEnhanced(m *Model) {
 	ext := &Extensions{
 		Data: data,
 		Hooks: &ExtensionHooks{
-			OnUpdate:        onUpdate,
-			OnRequestStart:  onRequestStart,
-			OnRequestEnd:    onRequestEnd,
-			StatusBarExtras: statusBarExtras,
-			HandleCustomKey: handleCustomKey,
+			OnUpdate:                   onUpdate,
+			OnRequestStart:             onRequestStart,
+			OnRequestEnd:               onRequestEnd,
+			StatusBarExtras:            statusBarExtras,
+			HandleCustomKey:            handleCustomKey,
+			OnNavigatorSelectionChange: onNavigatorSelectionChange,
 		},
 	}
 
@@ -107,10 +108,35 @@ func statusBarExtras(m *Model) []string {
 	return extras
 }
 
+// onNavigatorSelectionChange is called when the navigator selection changes.
+// This implements Navigation → Editor sync: when navigating requests,
+// the editor scrolls to show the selected request (only if editor is visible).
+func onNavigatorSelectionChange(m *Model) {
+	// Only sync if editor is visible (not collapsed)
+	if m.collapseState(paneRegionEditor) {
+		return
+	}
+
+	// Get the current active request
+	req := m.currentRequest
+	if req == nil {
+		return
+	}
+
+	// Scroll editor to show the request
+	m.revealRequestInEditor(req)
+}
+
 // handleCustomKey handles enhanced key bindings.
 // Returns true if the key was handled.
 func handleCustomKey(m *Model, key string) (bool, tea.Cmd) {
 	switch key {
+
+		// case "r", "e":
+		// 	res := m.navReqJumpCmd()
+		// 	if res.ok {
+		// 		return m.applyJump(res.cmd, res.focus)
+		// 	}
 	case "r":
 		// 'r' = reveal editor (expand it using the existing collapse system)
 		if m.collapseState(paneRegionEditor) {
