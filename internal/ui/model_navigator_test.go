@@ -107,7 +107,10 @@ func TestNavigatorIgnoresLinesOutsideRequests(t *testing.T) {
 	m.moveCursorToLine(1)
 
 	if sel := m.navigator.Selected(); sel == nil || sel.ID != firstID {
-		t.Fatalf("expected navigator to keep first request selected on non-request line, got %#v", sel)
+		t.Fatalf(
+			"expected navigator to keep first request selected on non-request line, got %#v",
+			sel,
+		)
 	}
 }
 
@@ -130,7 +133,10 @@ func TestNavigatorFollowsCursorAtEOF(t *testing.T) {
 		t.Fatalf("expected navigator to select last request at EOF, got %#v", sel)
 	}
 	if key := requestKey(m.doc.Requests[1]); m.activeRequestKey != key {
-		t.Fatalf("expected active request to follow last request at EOF, got %s", m.activeRequestKey)
+		t.Fatalf(
+			"expected active request to follow last request at EOF, got %s",
+			m.activeRequestKey,
+		)
 	}
 }
 
@@ -415,7 +421,9 @@ func TestNavigatorTextFilterRespectsWordBoundaries(t *testing.T) {
 		}
 	}
 	if foundPost {
-		t.Fatalf("expected POST request with 'together' in description to be excluded when filtering GET")
+		t.Fatalf(
+			"expected POST request with 'together' in description to be excluded when filtering GET",
+		)
 	}
 }
 
@@ -492,7 +500,8 @@ func TestNavigatorFilterLoadsOtherFiles(t *testing.T) {
 	}
 	found := false
 	for _, child := range node.Children {
-		if child.Kind == navigator.KindRequest && strings.Contains(strings.ToLower(child.Title), "second") {
+		if child.Kind == navigator.KindRequest &&
+			strings.Contains(strings.ToLower(child.Title), "second") {
 			found = true
 			break
 		}
@@ -502,11 +511,111 @@ func TestNavigatorFilterLoadsOtherFiles(t *testing.T) {
 	}
 }
 
+func TestNavigatorBuildsDirectoryTree(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "root.http")
+	dir := filepath.Join(tmp, "rtsfiles")
+	nested := filepath.Join(dir, "nested")
+	fileA := filepath.Join(dir, "one.http")
+	fileB := filepath.Join(dir, "mod.rts")
+	fileC := filepath.Join(nested, "two.http")
+
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", nested, err)
+	}
+	writeSampleFile(t, root, "### root\nGET https://example.com\n")
+	writeSampleFile(t, fileA, "### one\nGET https://example.com/one\n")
+	writeSampleFile(t, fileB, "export const x = 1\n")
+	writeSampleFile(t, fileC, "### two\nGET https://example.com/two\n")
+
+	model := New(Config{WorkspaceRoot: tmp, Recursive: true})
+	m := &model
+
+	dirID := "dir:" + dir
+	dirNode := m.navigator.Find(dirID)
+	if dirNode == nil || dirNode.Kind != navigator.KindDir {
+		t.Fatalf("expected directory node for %s", dir)
+	}
+
+	findChild := func(n *navigator.Node[any], id string) *navigator.Node[any] {
+		for _, c := range n.Children {
+			if c != nil && c.ID == id {
+				return c
+			}
+		}
+		return nil
+	}
+
+	childA := findChild(dirNode, "file:"+fileA)
+	if childA == nil || childA.Title != "one.http" {
+		t.Fatalf("expected child file %s with title one.http", fileA)
+	}
+	childB := findChild(dirNode, "file:"+fileB)
+	if childB == nil || childB.Title != "mod.rts" {
+		t.Fatalf("expected child file %s with title mod.rts", fileB)
+	}
+	childDir := findChild(dirNode, "dir:"+nested)
+	if childDir == nil || childDir.Kind != navigator.KindDir || childDir.Title != "nested" {
+		t.Fatalf("expected nested directory node %s", nested)
+	}
+	if nestedChild := findChild(childDir, "file:"+fileC); nestedChild == nil {
+		t.Fatalf("expected nested file %s under %s", fileC, nested)
+	}
+}
+
+func TestNavigatorDirFirstSort(t *testing.T) {
+	tmp := t.TempDir()
+	dir := filepath.Join(tmp, "alpha")
+	nested := filepath.Join(dir, "beta")
+	rootFile := filepath.Join(tmp, "zeta.http")
+	dirFile := filepath.Join(dir, "a.http")
+	nestedFile := filepath.Join(nested, "b.http")
+
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", nested, err)
+	}
+	writeSampleFile(t, rootFile, "### root\nGET https://example.com\n")
+	writeSampleFile(t, dirFile, "### a\nGET https://example.com/a\n")
+	writeSampleFile(t, nestedFile, "### b\nGET https://example.com/b\n")
+
+	model := New(Config{WorkspaceRoot: tmp, Recursive: true})
+	m := &model
+
+	rows := m.navigator.Rows()
+	if len(rows) < 2 {
+		t.Fatalf("expected at least 2 rows, got %d", len(rows))
+	}
+	if rows[0].Node == nil || rows[0].Node.Kind != navigator.KindDir {
+		t.Fatalf("expected first row to be dir, got %+v", rows[0].Node)
+	}
+	if rows[1].Node == nil || rows[1].Node.Kind != navigator.KindFile {
+		t.Fatalf("expected second row to be file, got %+v", rows[1].Node)
+	}
+
+	dirNode := m.navigator.Find("dir:" + dir)
+	if dirNode == nil {
+		t.Fatalf("expected dir node for %s", dir)
+	}
+	if len(dirNode.Children) < 2 {
+		t.Fatalf("expected dir node to have children, got %d", len(dirNode.Children))
+	}
+	if dirNode.Children[0].Kind != navigator.KindDir || dirNode.Children[0].Title != "beta" {
+		t.Fatalf("expected nested dir first under %s", dir)
+	}
+	if dirNode.Children[1].Kind != navigator.KindFile || dirNode.Children[1].Title != "a.http" {
+		t.Fatalf("expected file after dir under %s", dir)
+	}
+}
+
 func TestNavigatorEscClearsFilters(t *testing.T) {
 	model := New(Config{})
 	m := &model
 	m.navigator = navigator.New[any]([]*navigator.Node[any]{
-		{ID: "file:/tmp/a", Kind: navigator.KindFile, Payload: navigator.Payload[any]{FilePath: "/tmp/a"}},
+		{
+			ID:      "file:/tmp/a",
+			Kind:    navigator.KindFile,
+			Payload: navigator.Payload[any]{FilePath: "/tmp/a"},
+		},
 	})
 	m.ensureNavigatorFilter()
 	m.navigatorFilter.SetValue("abc")
@@ -541,7 +650,13 @@ func TestNavigatorFilterTypingIgnoresNavShortcuts(t *testing.T) {
 			Payload:  navigator.Payload[any]{FilePath: "/tmp/a"},
 			Expanded: true,
 			Children: []*navigator.Node[any]{
-				{ID: "req:/tmp/a:0", Kind: navigator.KindRequest, Title: "get", Method: "GET", Payload: navigator.Payload[any]{FilePath: "/tmp/a"}},
+				{
+					ID:      "req:/tmp/a:0",
+					Kind:    navigator.KindRequest,
+					Title:   "get",
+					Method:  "GET",
+					Payload: navigator.Payload[any]{FilePath: "/tmp/a"},
+				},
 			},
 		},
 	})
@@ -637,10 +752,17 @@ func TestNavigatorRequestEnterSendsFromSidebar(t *testing.T) {
 		t.Fatalf("expected navigator selection to be a request, got %v", sel)
 	}
 	if _, ok := m.navigator.Selected().Payload.Data.(*restfile.Request); !ok {
-		t.Fatalf("expected navigator selection payload to be request, got %T", m.navigator.Selected().Payload.Data)
+		t.Fatalf(
+			"expected navigator selection payload to be request, got %T",
+			m.navigator.Selected().Payload.Data,
+		)
 	}
 	if sel := m.navigator.Selected(); sel == nil || !samePath(sel.Payload.FilePath, m.currentFile) {
-		t.Fatalf("expected navigator selection to target current file, got %v vs %q", sel, m.currentFile)
+		t.Fatalf(
+			"expected navigator selection to target current file, got %v vs %q",
+			sel,
+			m.currentFile,
+		)
 	}
 	if m.activeRequestKey == "" {
 		t.Fatalf("expected active request to remain selected after navigator sync")
@@ -656,7 +778,13 @@ func TestNavigatorRequestEnterSendsFromSidebar(t *testing.T) {
 			path = sel.Payload.FilePath
 		}
 		items := m.requestList.Items()
-		t.Fatalf("expected request list selection, got %d (items=%d path=%q current=%q)", idx, len(items), path, m.currentFile)
+		t.Fatalf(
+			"expected request list selection, got %d (items=%d path=%q current=%q)",
+			idx,
+			len(items),
+			path,
+			m.currentFile,
+		)
 	}
 	if _, ok := m.requestList.SelectedItem().(requestListItem); !ok {
 		t.Fatalf("expected request list item to be selected")
@@ -669,7 +797,10 @@ func TestNavigatorRequestEnterSendsFromSidebar(t *testing.T) {
 }
 
 func TestNavigatorRequestLJumpsToDefinition(t *testing.T) {
-	content := strings.Repeat("\n", 5) + "### example\n# @name getExample\nGET https://example.com\n"
+	content := strings.Repeat(
+		"\n",
+		5,
+	) + "### example\n# @name getExample\nGET https://example.com\n"
 	model := newTestModelWithDoc(content)
 	m := model
 	m.currentFile = "/tmp/sample.http"

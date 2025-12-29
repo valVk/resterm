@@ -31,6 +31,8 @@ type profileState struct {
 	measuredEnd   time.Time
 	canceled      bool
 	cancelReason  string
+	skipped       bool
+	skipReason    string
 }
 
 type profileFailure struct {
@@ -60,13 +62,19 @@ func (s *profileState) failureCount() int {
 	return count
 }
 
-func (m *Model) startProfileRun(doc *restfile.Document, req *restfile.Request, options httpclient.Options) tea.Cmd {
+func (m *Model) startProfileRun(
+	doc *restfile.Document,
+	req *restfile.Request,
+	options httpclient.Options,
+) tea.Cmd {
 	if req == nil {
 		return nil
 	}
 	if req.GRPC != nil {
-		m.setStatusMessage(statusMsg{text: "Profiling is not supported for gRPC requests", level: statusWarn})
-		return m.executeRequest(doc, req, options, "")
+		m.setStatusMessage(
+			statusMsg{text: "Profiling is not supported for gRPC requests", level: statusWarn},
+		)
+		return m.executeRequest(doc, req, options, "", nil)
 	}
 
 	spec := restfile.ProfileSpec{}
@@ -111,7 +119,12 @@ func (m *Model) startProfileRun(doc *restfile.Document, req *restfile.Request, o
 	m.statusPulseBase = strings.TrimSpace(profileProgressLabel(state))
 	m.statusPulseFrame = 0
 
-	m.setStatusMessage(statusMsg{text: fmt.Sprintf("%s warmup 0/%d", state.messageBase, state.warmup), level: statusInfo})
+	m.setStatusMessage(
+		statusMsg{
+			text:  fmt.Sprintf("%s warmup 0/%d", state.messageBase, state.warmup),
+			level: statusInfo,
+		},
+	)
 
 	var batchCmds []tea.Cmd
 	execCmd := m.executeProfileIteration()
@@ -158,7 +171,7 @@ func (m *Model) executeProfileIteration() tea.Cmd {
 	m.statusPulseBase = progressText
 	m.showProfileProgress(state)
 
-	cmd := m.executeRequest(state.doc, iterationReq, state.options, "")
+	cmd := m.executeRequest(state.doc, iterationReq, state.options, "", nil)
 	return cmd
 }
 
@@ -196,6 +209,20 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 		if hadCurrent && state.index < state.total {
 			state.index++
 		}
+		m.statusPulseBase = ""
+		m.statusPulseFrame = 0
+		m.sending = false
+		return m.finalizeProfileRun(msg, state)
+	}
+
+	if msg.skipped {
+		state.skipped = true
+		if strings.TrimSpace(state.skipReason) == "" {
+			state.skipReason = msg.skipReason
+		}
+		m.lastError = nil
+		m.lastResponse = nil
+		m.lastGRPC = nil
 		m.statusPulseBase = ""
 		m.statusPulseFrame = 0
 		m.sending = false
@@ -245,7 +272,10 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 		m.sending = true
 		if state.delay > 0 {
 			var delayCmds []tea.Cmd
-			next := tea.Tick(state.delay, func(time.Time) tea.Msg { return profileNextIterationMsg{} })
+			next := tea.Tick(
+				state.delay,
+				func(time.Time) tea.Msg { return profileNextIterationMsg{} },
+			)
 			delayCmds = append(delayCmds, next)
 
 			// Extension OnRequestStart hook
@@ -288,6 +318,13 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 }
 
 func evaluateProfileOutcome(msg responseMsg) (bool, string) {
+	if msg.skipped {
+		reason := strings.TrimSpace(msg.skipReason)
+		if reason == "" {
+			reason = "request skipped"
+		}
+		return false, reason
+	}
 	if msg.err != nil {
 		return false, errdef.Message(msg.err)
 	}
@@ -351,7 +388,12 @@ func (m *Model) finalizeProfileRun(msg responseMsg, state *profileState) tea.Cmd
 			cmds = append(cmds, cmd)
 		}
 	} else if msg.response != nil {
-		if cmd := m.consumeHTTPResponse(msg.response, msg.tests, msg.scriptErr, msg.environment); cmd != nil {
+		if cmd := m.consumeHTTPResponse(
+			msg.response,
+			msg.tests,
+			msg.scriptErr,
+			msg.environment,
+		); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	} else {
@@ -399,7 +441,7 @@ func (m *Model) finalizeProfileRun(msg responseMsg, state *profileState) tea.Cmd
 
 	summary := buildProfileSummary(state)
 	level := statusInfo
-	if canceled {
+	if canceled || (state != nil && state.skipped) {
 		level = statusWarn
 	}
 	m.setStatusMessage(statusMsg{text: summary, level: level})
@@ -422,6 +464,13 @@ func buildProfileSummary(state *profileState) string {
 		return "Profiling complete"
 	}
 
+	if state.skipped {
+		reason := strings.TrimSpace(state.skipReason)
+		if reason == "" {
+			reason = "condition evaluated to false"
+		}
+		return fmt.Sprintf("Profiling skipped: %s", reason)
+	}
 	mt := profileMetricsFromState(state)
 	if state.canceled {
 		planned := state.total
@@ -432,10 +481,22 @@ func buildProfileSummary(state *profileState) string {
 		if measuredPlanned == 0 {
 			measuredPlanned = mt.measured
 		}
-		return fmt.Sprintf("Profiling canceled after %d/%d runs (%d/%d measured)", mt.total, planned, mt.measured, measuredPlanned)
+		return fmt.Sprintf(
+			"Profiling canceled after %d/%d runs (%d/%d measured)",
+			mt.total,
+			planned,
+			mt.measured,
+			measuredPlanned,
+		)
 	}
 
-	return fmt.Sprintf("Profiling complete: %d/%d success (%d failure, %d warmup)", mt.success, state.spec.Count, mt.failures, mt.warmup)
+	return fmt.Sprintf(
+		"Profiling complete: %d/%d success (%d failure, %d warmup)",
+		mt.success,
+		state.spec.Count,
+		mt.failures,
+		mt.warmup,
+	)
 }
 
 func (m *Model) buildProfileReport(state *profileState, stats analysis.LatencyStats) string {
@@ -706,7 +767,17 @@ func profileProgressDots(frame int) int {
 }
 
 func profileStatusText(state *profileState) string {
-	if state == nil || !state.canceled {
+	if state == nil {
+		return ""
+	}
+	if state.skipped {
+		reason := strings.TrimSpace(state.skipReason)
+		if reason == "" {
+			reason = "condition evaluated to false"
+		}
+		return fmt.Sprintf("Skipped: %s", reason)
+	}
+	if !state.canceled {
 		return ""
 	}
 	if summary := buildProfileSummary(state); strings.TrimSpace(summary) != "" {
@@ -731,7 +802,11 @@ func writeProfileSummary(b *strings.Builder, state *profileState, mt profileMetr
 	writeProfileRow(b, "Success", mt.successRate)
 	writeProfileRow(b, "Window", formatProfileWindow(mt))
 	if state.delay > 0 {
-		writeProfileRow(b, "Delay", fmt.Sprintf("%s between runs", formatDurationShort(state.delay)))
+		writeProfileRow(
+			b,
+			"Delay",
+			fmt.Sprintf("%s between runs", formatDurationShort(state.delay)),
+		)
 	}
 	writeProfileRow(b, "Throughput", formatProfileThroughput(mt))
 	if mt.success == 0 {
@@ -770,7 +845,10 @@ func formatProfileWindow(mt profileMetrics) string {
 		if mt.measured != 1 {
 			runLabel = "runs"
 		}
-		parts = append(parts, fmt.Sprintf("%d %s in %s", mt.measured, runLabel, formatDurationShort(mt.elapsed)))
+		parts = append(
+			parts,
+			fmt.Sprintf("%d %s in %s", mt.measured, runLabel, formatDurationShort(mt.elapsed)),
+		)
 	} else if mt.elapsed > 0 {
 		parts = append(parts, formatDurationShort(mt.elapsed))
 	}

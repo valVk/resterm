@@ -9,6 +9,14 @@
 </p>
 
 <p align="center">
+  <strong>Resterm Script</strong>
+</p>
+
+<p align="center">
+  <img src="_media/restermscript.png" alt="Screenshot of resterm with resterm rcript" width="720" />
+</p>
+
+<p align="center">
   <strong>Trace and Timeline</strong>
 </p>
 
@@ -49,7 +57,7 @@ TL;DR why resterm:
 - Everything lives in plain files (.http/.rest) - **no cloud or account - everything stays local**.
 - **Built-in SSH tunnels** for HTTP/gRPC/WebSocket/SSE.
 - **OAuth 2.0 built-in** - client credentials, password grant, authorization code + PKCE with automatic browser flow and token refresh.
-- **Scripting** to modify/assert requests, capture or reuse tokens and check or modify responses/streams.
+- **RestermScript (RTS)** resterm focused custom scripting lang for safe, predictable request-time logic (templates, directives, workflows).
 - Fast iteration loop with _explorer_ + _history_ + _diff/compare_ + _captures/workflows_.
 - **Debuggable** - timeline tracing, profiler, streaming transcripts and inline scripts/tests.
 
@@ -68,6 +76,7 @@ TL;DR why resterm:
 **Deep dive**
 - [OAuth 2.0](#feature-snapshots)
 - [Workflows & scripting](#feature-snapshots)
+- [Why RestermScript?](#why-restermscript)
 - [Compare runs](#feature-snapshots)
 - [Tracing & timeline](#feature-snapshots)
 - [Streaming (WebSocket & SSE)](#feature-snapshots)
@@ -95,6 +104,22 @@ TL;DR why resterm:
 - **SSH tunnels** route HTTP/gRPC/WebSocket/SSE traffic through bastions with host key verification, keep-alives, retries, and persistent tunnels.
 - **File Watcher** with automatic file change detection: Resterm warns when the current file changes or goes missing on disk and lets you reload from disk (`g Shift+R`) or keep your buffer, plus a shortcut for quick workspace rescan (files) (`g Shift+O`).
 - **Custom theming & bindings** if you want to make a resterm more alligned with your taste.
+
+## Why RestermScript?
+
+RestermScript (RTS) is the small expression language behind templates, directives, and reusable `.rts` modules. It exists because request files need a bit of logic, but a full JavaScript runtime is heavier than most workflows need and harder to review at a glance. RTS keeps the logic tight, readable, and predictable, so you can open a `.http` file and understand exactly what will happen.
+
+Quick example:
+
+```http
+# @use ./rts/auth.rts as auth
+# @when env.has("feature")
+# @assert response.statusCode == 200
+GET https://api.example.com/users/{{= auth.userId(vars.get("user")) }}
+Authorization: Bearer {{= auth.token(env.get("token")) }}
+```
+
+Full reference: [`docs/restermscript.md`](docs/restermscript.md).
 
 ## Installation
 

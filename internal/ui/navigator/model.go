@@ -14,9 +14,9 @@ const (
 	KindFile Kind = iota
 	KindRequest
 	KindWorkflow
+	KindDir
 )
 
-// Payload holds optional metadata for a node.
 type Payload[T any] struct {
 	FilePath string
 	Data     T
@@ -266,6 +266,7 @@ func (m *Model[T]) VisibleRows() []Flat[T] {
 	if m.offset < 0 {
 		m.offset = 0
 	}
+
 	end := m.offset + m.viewHeight
 	if end > len(m.flat) {
 		end = len(m.flat)
@@ -333,7 +334,13 @@ func (m *Model[T]) ensureVisible() {
 	m.offset = scroll.Align(m.sel, m.offset, m.viewHeight, len(m.flat))
 }
 
-func flatten[T any](nodes []*Node[T], level int, filter string, methods map[string]bool, tags map[string]bool) []Flat[T] {
+func flatten[T any](
+	nodes []*Node[T],
+	level int,
+	filter string,
+	methods map[string]bool,
+	tags map[string]bool,
+) []Flat[T] {
 	var rows []Flat[T]
 	for _, n := range nodes {
 		childRows, ok := visible(n, level, filter, methods, tags)
@@ -344,7 +351,13 @@ func flatten[T any](nodes []*Node[T], level int, filter string, methods map[stri
 	return rows
 }
 
-func visible[T any](n *Node[T], level int, filter string, methods map[string]bool, tags map[string]bool) ([]Flat[T], bool) {
+func visible[T any](
+	n *Node[T],
+	level int,
+	filter string,
+	methods map[string]bool,
+	tags map[string]bool,
+) ([]Flat[T], bool) {
 	if n == nil {
 		return nil, false
 	}
@@ -364,9 +377,11 @@ func visible[T any](n *Node[T], level int, filter string, methods map[string]boo
 			}
 		}
 	}
+
 	if !matches && !childMatch {
 		return nil, false
 	}
+
 	self := Flat[T]{Node: n, Level: level}
 	if len(childRows) == 0 {
 		return []Flat[T]{self}, true
@@ -374,7 +389,12 @@ func visible[T any](n *Node[T], level int, filter string, methods map[string]boo
 	return append([]Flat[T]{self}, childRows...), true
 }
 
-func nodeMatches[T any](n *Node[T], filter string, methods map[string]bool, tags map[string]bool) bool {
+func nodeMatches[T any](
+	n *Node[T],
+	filter string,
+	methods map[string]bool,
+	tags map[string]bool,
+) bool {
 	if n == nil {
 		return false
 	}
@@ -384,21 +404,25 @@ func nodeMatches[T any](n *Node[T], filter string, methods map[string]bool, tags
 			if !methods[strings.ToUpper(n.Method)] {
 				return false
 			}
-		case KindWorkflow, KindFile:
+		case KindWorkflow, KindFile, KindDir:
 		default:
 		}
 	}
+
 	if len(tags) > 0 && !containsAnyTag(n.Tags, tags) {
 		return false
 	}
+
 	filter = strings.TrimSpace(filter)
 	if filter == "" {
 		return true
 	}
+
 	queryTokens := filterTokens(filter)
 	if len(queryTokens) == 0 {
 		return true
 	}
+
 	candidateTokens := nodeTokens(n)
 	for _, q := range queryTokens {
 		if !tokenInCandidates(q, candidateTokens) {
