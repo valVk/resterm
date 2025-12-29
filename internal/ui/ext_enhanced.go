@@ -131,28 +131,22 @@ func onNavigatorSelectionChange(m *Model) {
 // Returns true if the key was handled.
 func handleCustomKey(m *Model, key string) (bool, tea.Cmd) {
 	switch key {
-
-		// case "r", "e":
-		// 	res := m.navReqJumpCmd()
-		// 	if res.ok {
-		// 		return m.applyJump(res.cmd, res.focus)
-		// 	}
-	case "r":
+	case "r", "right":
 		// 'r' = reveal editor (expand it using the existing collapse system)
 		if m.collapseState(paneRegionEditor) {
 			// Editor is collapsed, so expand it
 			return true, m.togglePaneCollapse(paneRegionEditor)
 		}
-	case "right":
-		// Right arrow = reveal editor (expand it) when:
-		// 1. Editor is collapsed
-		// 2. Focus is on navigator (not on editor itself)
-		// This prevents conflict with navigator's right arrow usage
-		if m.collapseState(paneRegionEditor) &&
-		   (m.focus == focusRequests || m.focus == focusFile || m.focus == focusWorkflows) {
-			// Editor is collapsed and we're in navigator, so expand it
-			return true, m.togglePaneCollapse(paneRegionEditor)
-		}
+	// case "right":
+	// 	// Right arrow = reveal editor (expand it) when:
+	// 	// 1. Editor is collapsed
+	// 	// 2. Focus is on navigator (not on editor itself)
+	// 	// This prevents conflict with navigator's right arrow usage
+	// 	if m.collapseState(paneRegionEditor) &&
+	// 	   (m.focus == focusRequests || m.focus == focusFile || m.focus == focusWorkflows) {
+	// 		// Editor is collapsed and we're in navigator, so expand it
+	// 		return true, m.togglePaneCollapse(paneRegionEditor)
+	// 	}
 	case "q":
 		// 'q' = quit/hide editor (collapse it using the existing collapse system)
 		// Only when editor is focused

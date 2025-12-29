@@ -70,8 +70,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-			// Only call standard key handler if extension didn't handle it
-			if !handled {
+			// If extension handled the key, prevent other components from processing it
+			if handled {
+				// Suppress navigator key handling
+				if m.focus == focusFile || m.focus == focusRequests || m.focus == focusWorkflows {
+					m.suppressListKey = true
+				}
+				// Suppress editor key handling
+				if m.focus == focusEditor {
+					m.suppressEditorKey = true
+				}
+			} else {
+				// Only call standard key handler if extension didn't handle it
 				if cmd := m.handleKey(typed); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
