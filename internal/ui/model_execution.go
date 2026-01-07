@@ -29,6 +29,7 @@ import (
 	"github.com/unkn0wn-root/resterm/internal/scripts"
 	"github.com/unkn0wn-root/resterm/internal/settings"
 	"github.com/unkn0wn-root/resterm/internal/ssh"
+	"github.com/unkn0wn-root/resterm/internal/stream"
 	"github.com/unkn0wn-root/resterm/internal/traceutil"
 	"github.com/unkn0wn-root/resterm/internal/util"
 	"github.com/unkn0wn-root/resterm/internal/vars"
@@ -96,8 +97,7 @@ func (m *Model) cancelRuns(status string) tea.Cmd {
 	}
 
 	m.sending = false
-	m.statusPulseBase = ""
-	m.statusPulseFrame = 0
+	m.stopStatusPulse()
 
 	var cmds []tea.Cmd
 	if cmd := m.cancelProfileRun(status); cmd != nil {
@@ -559,7 +559,7 @@ func (m *Model) executeRequest(
 		}()
 
 		if req.GRPC != nil {
-			if err := m.prepareGRPCRequest(req, resolver); err != nil {
+			if err := m.prepareGRPCRequest(req, resolver, grpcOpts.BaseDir); err != nil {
 				return responseMsg{err: err, executed: req}
 			}
 		}
@@ -573,7 +573,10 @@ func (m *Model) executeRequest(
 				grpcOpts.SSH = sshPlan
 			}
 
-			grpcResp, grpcErr := m.grpcClient.Execute(ctx, req, req.GRPC, grpcOpts)
+			hook := func(session *stream.Session) {
+				m.attachGRPCSession(session, req)
+			}
+			grpcResp, grpcErr := m.grpcClient.Execute(ctx, req, req.GRPC, grpcOpts, hook)
 			if grpcErr != nil {
 				return responseMsg{
 					grpc:        grpcResp,
@@ -888,8 +891,21 @@ const (
 	streamHeaderSummary = "X-Resterm-Stream-Summary"
 )
 
+func (m *Model) stopStatusPulse() {
+	m.statusPulseOn = false
+	m.statusPulseBase = ""
+	m.statusPulseFrame = 0
+}
+
+func (m *Model) stopStatusPulseIfIdle() {
+	if m.hasActiveRun() {
+		return
+	}
+	m.stopStatusPulse()
+}
+
 func (m *Model) scheduleStatusPulse() tea.Cmd {
-	if !m.sending {
+	if !m.statusPulseOn || !m.hasActiveRun() {
 		return nil
 	}
 	seq := m.statusPulseSeq
@@ -899,6 +915,10 @@ func (m *Model) scheduleStatusPulse() tea.Cmd {
 }
 
 func (m *Model) startStatusPulse() tea.Cmd {
+	if m.statusPulseOn {
+		return nil
+	}
+	m.statusPulseOn = true
 	m.statusPulseSeq++
 	m.statusPulseFrame = 0
 	return m.scheduleStatusPulse()
@@ -908,7 +928,8 @@ func (m *Model) handleStatusPulse(msg statusPulseMsg) tea.Cmd {
 	if msg.seq != m.statusPulseSeq {
 		return nil
 	}
-	if !m.sending {
+	if !m.statusPulseOn || !m.hasActiveRun() {
+		m.stopStatusPulse()
 		return nil
 	}
 
@@ -2130,7 +2151,11 @@ func cloneStringMap(input map[string]string) map[string]string {
 	return clone
 }
 
-func (m *Model) prepareGRPCRequest(req *restfile.Request, resolver *vars.Resolver) error {
+func (m *Model) prepareGRPCRequest(
+	req *restfile.Request,
+	resolver *vars.Resolver,
+	baseDir string,
+) error {
 	grpcReq := req.GRPC
 	if grpcReq == nil {
 		return nil
@@ -2157,6 +2182,15 @@ func (m *Model) prepareGRPCRequest(req *restfile.Request, resolver *vars.Resolve
 		grpcReq.MessageFile = req.Body.FilePath
 		grpcReq.Message = ""
 	}
+	grpcReq.MessageExpanded = ""
+	grpcReq.MessageExpandedSet = false
+
+	if err := grpcclient.ValidateMetaPairs(grpcReq.Metadata); err != nil {
+		return err
+	}
+	if err := grpcclient.ValidateHeaderPairs(req.Headers); err != nil {
+		return err
+	}
 
 	if resolver != nil {
 		target, err := resolver.ExpandTemplates(grpcReq.Target)
@@ -2172,13 +2206,27 @@ func (m *Model) prepareGRPCRequest(req *restfile.Request, resolver *vars.Resolve
 			}
 			grpcReq.Message = expanded
 		}
+		if req.Body.Options.ExpandTemplates && strings.TrimSpace(grpcReq.MessageFile) != "" {
+			expanded, err := expandGRPCMessageFile(grpcReq.MessageFile, baseDir, resolver)
+			if err != nil {
+				return err
+			}
+			grpcReq.MessageExpanded = expanded
+			grpcReq.MessageExpandedSet = true
+		}
 		if len(grpcReq.Metadata) > 0 {
-			for key, value := range grpcReq.Metadata {
+			for i := range grpcReq.Metadata {
+				value := grpcReq.Metadata[i].Value
 				expanded, err := resolver.ExpandTemplates(value)
 				if err != nil {
-					return errdef.Wrap(errdef.CodeHTTP, err, "expand grpc metadata %s", key)
+					return errdef.Wrap(
+						errdef.CodeHTTP,
+						err,
+						"expand grpc metadata %s",
+						grpcReq.Metadata[i].Key,
+					)
 				}
-				grpcReq.Metadata[key] = expanded
+				grpcReq.Metadata[i].Value = expanded
 			}
 		}
 		if authority := strings.TrimSpace(grpcReq.Authority); authority != "" {
@@ -2216,6 +2264,29 @@ func (m *Model) prepareGRPCRequest(req *restfile.Request, resolver *vars.Resolve
 	}
 	req.URL = grpcReq.Target
 	return nil
+}
+
+func expandGRPCMessageFile(
+	path string,
+	baseDir string,
+	resolver *vars.Resolver,
+) (string, error) {
+	if resolver == nil {
+		return "", nil
+	}
+	full := path
+	if !filepath.IsAbs(full) && baseDir != "" {
+		full = filepath.Join(baseDir, full)
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return "", errdef.Wrap(errdef.CodeFilesystem, err, "read grpc message file %s", path)
+	}
+	expanded, err := resolver.ExpandTemplates(string(data))
+	if err != nil {
+		return "", errdef.Wrap(errdef.CodeHTTP, err, "expand grpc message file")
+	}
+	return expanded, nil
 }
 
 func normalizeGRPCTarget(target string, grpcReq *restfile.GRPCRequest) string {
@@ -2332,10 +2403,8 @@ func cloneRequest(req *restfile.Request) *restfile.Request {
 	if req.GRPC != nil {
 		grpcCopy := *req.GRPC
 		if len(grpcCopy.Metadata) > 0 {
-			meta := make(map[string]string, len(grpcCopy.Metadata))
-			for k, v := range grpcCopy.Metadata {
-				meta[k] = v
-			}
+			meta := make([]restfile.MetadataPair, len(grpcCopy.Metadata))
+			copy(meta, grpcCopy.Metadata)
 			grpcCopy.Metadata = meta
 		}
 		clone.GRPC = &grpcCopy
@@ -2438,13 +2507,8 @@ func renderRequestText(req *restfile.Request) string {
 			builder.WriteString("# @grpc-authority " + grpc.Authority + "\n")
 		}
 		if len(grpc.Metadata) > 0 {
-			keys := make([]string, 0, len(grpc.Metadata))
-			for k := range grpc.Metadata {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				builder.WriteString(fmt.Sprintf("# @grpc-metadata %s: %s\n", k, grpc.Metadata[k]))
+			for _, pair := range grpc.Metadata {
+				builder.WriteString(fmt.Sprintf("# @grpc-metadata %s: %s\n", pair.Key, pair.Value))
 			}
 		}
 		builder.WriteString("\n")

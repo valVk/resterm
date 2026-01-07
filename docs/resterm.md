@@ -211,8 +211,8 @@ Binary responses show size and type hints alongside quick previews. For large bi
 
 - Add `# @trace` directives to enable HTTP tracing on a request. Budgets use `phase<=duration` notation (`dns<=50ms`, `total<=300ms`, etc.) with an optional `tolerance=` applied to every phase. Supported phases map to `nettrace`: `dns`, `connect`, `tls`, `request_headers`, `request_body`, `ttfb`, `transfer`, and `total`.
 - When a traced response arrives, Resterm evaluates budgets, raises status bar warnings for breaches, and unlocks the Timeline tab. Use `Ctrl+Alt+L` or the `g+t` chord to jump straight to it from anywhere.
-- The Timeline view renders proportional bars, annotates overruns, and lists budget breaches. Metadata such as cached DNS results or reused sockets appears beneath each phase.
-- Scripts can inspect traces through the `trace` binding (`trace.enabled()`, `trace.phases()`, `trace.breaches()`, `trace.withinBudget()`, etc.), allowing automated validations inside Goja test blocks.
+- The Timeline view renders proportional bars, annotates overruns, and lists budget breaches. Metadata such as cached DNS results or reused sockets appears beneath each phase, followed by Connection and TLS panels (protocol, reuse, proxy/SSH, resolved IPs, cipher/ALPN, cert chain, SANs, issuer, expiry).
+- Scripts can inspect traces through the `trace` binding (`trace.enabled()`, `trace.phases()`, `trace.connection()`, `trace.tls()`, `trace.breaches()`, `trace.withinBudget()`, etc.), allowing automated validations inside Goja test blocks.
 - See `_examples/trace.http` for a runnable pair of requests (one within budget, one deliberately breaching) that demonstrate the timeline output and status messaging.
 - Configure optional OpenTelemetry export with `RESTERM_TRACE_OTEL_ENDPOINT` (or `--trace-otel-endpoint`). Additional switches: `RESTERM_TRACE_OTEL_INSECURE` / `--trace-otel-insecure`, `RESTERM_TRACE_OTEL_SERVICE` / `--trace-otel-service`, `RESTERM_TRACE_OTEL_TIMEOUT`, and `RESTERM_TRACE_OTEL_HEADERS`. Spans are emitted only while tracing is enabled; HTTP failures and budget breaches mark the span status as `Error`.
 
@@ -819,12 +819,17 @@ gRPC requests start with a line such as `GRPC host:port`. Metadata directives de
 
 Supplying any gRPC TLS setting (roots, client cert/key, insecure) automatically enables TLS unless you explicitly force plaintext with `@grpc-plaintext true`.
 
-The request body contains protobuf JSON. Use `< payload.json` to load from disk. Responses display message JSON, headers, and trailers; history stores method, status, and timing alongside HTTP calls.
+Reserved transport metadata keys (`grpc-*`, `content-type`, `user-agent`, `te`, etc.) are rejected in `@grpc-metadata` (and gRPC headers). Use `@timeout` / `@setting timeout` to apply deadlines.
+
+The request body contains protobuf JSON. Use `< payload.json` to load from disk, and add `# @body expand` if the file includes templates. Responses display message JSON, headers, and trailers; history stores method, status, and timing alongside HTTP calls.
+
+Streaming (server/client/bidi) is supported. Unary/server streaming requests use a single JSON object, while client/bidi streaming requests send a JSON array of message objects. Streaming responses return a JSON array, and the Stream tab shows a per-message transcript with a summary.
 
 Example:
 
 ```http
 ### Generate Report Over gRPC
+# @timeout 5s
 # @grpc analytics.ReportingService/GenerateReport
 # @grpc-reflection true
 # @grpc-plaintext true
@@ -837,6 +842,20 @@ GRPC {{grpc.host}}
   "tenantId": "{{tenant.id}}",
   "reportId": "rep-{{$uuid}}"
 }
+```
+
+Streaming example:
+
+```http
+### Bidi Stream Chat
+# @grpc chat.ChatService/Stream
+# @grpc-plaintext true
+GRPC {{grpc.host}}
+
+[
+  {"message": "hello"},
+  {"message": "again"}
+]
 ```
 
 ---

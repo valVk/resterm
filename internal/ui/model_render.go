@@ -27,7 +27,7 @@ var headerSegmentIcons = map[string]string{
 	"workspace": "▣",
 	"env":       "⬢",
 	"requests":  "⇄",
-	"active":    "⚡",
+	"active":    "◧",
 	"tests":     "✓",
 }
 
@@ -894,6 +894,9 @@ func (m Model) renderResponseColumn(id responsePaneID, focused bool, maxWidth in
 	} else {
 		content = pane.viewport.View()
 	}
+	if send := m.sendingView(pane, contentWidth, contentHeight); send != "" {
+		content = send
+	}
 	content = lipgloss.NewStyle().
 		MaxWidth(contentWidth).
 		MaxHeight(contentHeight).
@@ -985,6 +988,8 @@ func (m Model) buildTabRowContent(
 	if followLatest {
 		mode = "Live"
 	}
+	badge := m.tabBadgeText(mode)
+	shortBadge := m.tabBadgeShort(mode)
 	baseBadgeStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#A6A1BB"))
 	if !focused || m.focus != focusResponse {
@@ -995,7 +1000,7 @@ func (m Model) buildTabRowContent(
 			activeStyle:   m.theme.TabActive,
 			inactiveStyle: m.theme.TabInactive,
 			badgeStyle:    baseBadgeStyle.PaddingLeft(2),
-			badgeText:     strings.ToUpper(mode),
+			badgeText:     badge,
 			labelFn: func(full string, isActive bool) string {
 				text := full
 				if isActive && focused {
@@ -1008,14 +1013,14 @@ func (m Model) buildTabRowContent(
 			activeStyle:   m.theme.TabActive.Padding(0, 1),
 			inactiveStyle: m.theme.TabInactive.Padding(0),
 			badgeStyle:    baseBadgeStyle.PaddingLeft(1),
-			badgeText:     strings.ToUpper(mode),
+			badgeText:     badge,
 			adaptive:      true,
 		},
 		{
 			activeStyle:   m.theme.TabActive.Padding(0),
 			inactiveStyle: m.theme.TabInactive.Padding(0),
 			badgeStyle:    baseBadgeStyle.PaddingLeft(1),
-			badgeText:     firstRuneUpper(mode),
+			badgeText:     shortBadge,
 			labelFn: func(full string, isActive bool) string {
 				label := firstRuneUpper(full)
 				if label == "" {
@@ -1047,6 +1052,42 @@ func (m Model) buildTabRowContent(
 		}
 	}
 	return ""
+}
+
+var tabSpinFrames = []string{"⠋", "⠙", "⠹"}
+
+const responseSendingBase = "Sending request"
+
+func (m Model) tabSpinner() string {
+	if !m.sending || len(tabSpinFrames) == 0 {
+		return ""
+	}
+	idx := m.statusPulseFrame
+	if idx < 0 {
+		idx = 0
+	}
+	return tabSpinFrames[idx%len(tabSpinFrames)]
+}
+
+func (m Model) sendingView(pane *responsePaneState, width, height int) string {
+	if pane == nil || !pane.followLatest || pane.activeTab == responseTabHistory {
+		return ""
+	}
+	spin := m.tabSpinner()
+	if spin == "" {
+		return ""
+	}
+	msg := responseSendingBase + " " + spin
+	centered := centerContent(msg, width, height)
+	return m.applyResponseContentStyles(pane.activeTab, centered)
+}
+
+func (m Model) tabBadgeText(mode string) string {
+	return strings.ToUpper(strings.TrimSpace(mode))
+}
+
+func (m Model) tabBadgeShort(mode string) string {
+	return firstRuneUpper(mode)
 }
 
 func (m Model) buildStaticTabRow(
