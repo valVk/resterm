@@ -1,8 +1,18 @@
 package scroll
 
+// AlignOverride allows extensions to provide custom scroll alignment behavior.
+// If set, this function will be called instead of the default Align logic.
+var AlignOverride func(sel, off, h, total int) (offset int, override bool)
+
 // Align returns a y-offset that keeps the selection away from viewport edges.
 // It behaves like a lightweight scrolloff: nudge just enough to keep a small buffer.
 func Align(sel, off, h, total int) int {
+	// Check for extension override
+	if AlignOverride != nil {
+		if offset, override := AlignOverride(sel, off, h, total); override {
+			return offset
+		}
+	}
 	if h <= 0 || total <= 0 {
 		return 0
 	}
