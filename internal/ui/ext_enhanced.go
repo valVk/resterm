@@ -1,9 +1,7 @@
 package ui
 
 import (
-	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/unkn0wn-root/resterm/internal/ui/scroll"
 )
@@ -11,16 +9,13 @@ import (
 // enhancedData holds all enhanced UI state for the extensions.
 // This keeps enhanced data separate from the core Model struct.
 type enhancedData struct {
-	requestSpinner       spinner.Model
 	lastEditorCursorLine int
 }
 
 // InstallEnhanced sets up all enhanced UI features.
 // Call this from main after creating the model to enable enhanced features.
 func InstallEnhanced(m *Model) {
-	data := &enhancedData{
-		requestSpinner: createRequestSpinner(),
-	}
+	data := &enhancedData{}
 
 	ext := &Extensions{
 		Data: data,
@@ -78,14 +73,6 @@ func typewriterScrollAlign(sel, off, h, total int) (offset int, override bool) {
 	return targetOff, true
 }
 
-// createRequestSpinner initializes the spinner used during request execution.
-func createRequestSpinner() spinner.Model {
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	return s
-}
-
 // getEnhancedData safely retrieves the enhanced extension data from the model.
 func getEnhancedData(m *Model) *enhancedData {
 	ext := m.GetExtensions()
@@ -99,29 +86,16 @@ func getEnhancedData(m *Model) *enhancedData {
 	return data
 }
 
-// onUpdate handles spinner animation during request execution.
+// onUpdate handles extension-specific updates.
+// Main now handles request animations, so this is available for future extensions.
 func onUpdate(m *Model, msg tea.Msg) tea.Cmd {
-	data := getEnhancedData(m)
-	if data == nil || !m.sending {
-		return nil
-	}
-
-	// Update spinner animation
-	var cmd tea.Cmd
-	data.requestSpinner, cmd = data.requestSpinner.Update(msg)
-	return cmd
+	return nil
 }
 
 // onRequestStart is called when a request begins executing.
-// Returns the spinner tick command to start animation.
+// Main now handles request animations, so this is available for future extensions.
 func onRequestStart(m *Model) tea.Cmd {
-	data := getEnhancedData(m)
-	if data == nil {
-		return nil
-	}
-
-	// Start spinner animation
-	return data.requestSpinner.Tick
+	return nil
 }
 
 // onRequestEnd is called when a request completes.
@@ -131,21 +105,9 @@ func onRequestEnd(m *Model) tea.Cmd {
 }
 
 // statusBarExtras adds enhanced items to the status bar.
+// Main now handles request status display, so this is available for future extensions.
 func statusBarExtras(m *Model) []string {
-	data := getEnhancedData(m)
-	if data == nil {
-		return nil
-	}
-
-	var extras []string
-
-	// Show spinner when request is in progress
-	if m.sending {
-		spinnerText := data.requestSpinner.View() + " Sending request"
-		extras = append(extras, spinnerText)
-	}
-
-	return extras
+	return nil
 }
 
 // onNavigatorSelectionChange is called when the navigator selection changes.

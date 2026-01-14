@@ -538,27 +538,24 @@ func (m *Model) executeWorkflowRequest(
 	message := fmt.Sprintf("%s %d/%d: %s", title, state.index+1, len(state.steps), label)
 	m.statusPulseBase = message
 	m.setStatusMessage(statusMsg{text: message, level: statusInfo})
-	m.sending = true
+	spin := m.startSending()
 
 	cmd := m.executeRequest(state.doc, clone, options, "", extraVals, extraVars)
-	var batchCmds []tea.Cmd
-	batchCmds = append(batchCmds, cmd)
+
+	// Build command batch with extension hook
+	cmds := []tea.Cmd{cmd}
 
 	// Extension OnRequestStart hook
 	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
 		if hookCmd := ext.Hooks.OnRequestStart(m); hookCmd != nil {
-			batchCmds = append(batchCmds, hookCmd)
+			cmds = append(cmds, hookCmd)
 		}
 	}
 
-	if tick := m.startStatusPulse(); tick != nil {
-		batchCmds = append(batchCmds, tick)
-	}
+	pulse := m.startStatusPulse()
+	cmds = append(cmds, pulse, spin)
 
-	if len(batchCmds) > 0 {
-		return tea.Batch(batchCmds...)
-	}
-	return nil
+	return batchCmds(cmds)
 }
 
 func (m *Model) executeWorkflowRequestStep(
@@ -1147,7 +1144,7 @@ func (m *Model) handleWorkflowResponse(msg responseMsg) tea.Cmd {
 	}
 	current := state.current
 	state.current = nil
-	m.sending = false
+	m.stopSending()
 
 	canceled := state.canceled || isCanceled(msg.err)
 	inLoop := state.loop != nil
@@ -1393,7 +1390,7 @@ func (m *Model) finalizeWorkflowRun(state *workflowState) tea.Cmd {
 	summary := workflowSummary(state)
 	statsView := newWorkflowStatsView(state)
 	m.workflowRun = nil
-	m.sending = false
+	m.stopSending()
 	m.stopStatusPulseIfIdle()
 	m.setStatusMessage(statusMsg{text: summary, level: workflowStatusLevel(state)})
 	if state == nil || state.origin != workflowOriginForEach {
@@ -1697,6 +1694,7 @@ func (m *Model) recordWorkflowHistory(state *workflowState, summary, report stri
 		ExecutedAt:  time.Now(),
 		Environment: m.cfg.EnvironmentName,
 		RequestName: workflowName,
+		FilePath:    m.historyFilePath(),
 		Method:      restfile.HistoryMethodWorkflow,
 		URL:         workflowName,
 		Status:      summary,
@@ -1716,19 +1714,31 @@ func (m *Model) recordWorkflowHistory(state *workflowState, summary, report stri
 		)
 		return
 	}
-	m.historyWorkflowName = workflowName
 	m.historySelectedID = entry.ID
 	m.historyJumpToLatest = false
-	m.syncHistory()
-	m.historyList.Select(0)
+	m.setHistoryWorkflow(workflowName)
 }
 
 func (m *Model) setHistoryWorkflow(name string) {
 	trimmed := history.NormalizeWorkflowName(name)
-	if m.historyWorkflowName == trimmed {
+	if trimmed == "" {
+		if m.historyWorkflowName == "" && m.historyScope != historyScopeWorkflow {
+			return
+		}
+		m.historyWorkflowName = ""
+		if m.historyScope == historyScopeWorkflow {
+			m.historyScope = historyScopeRequest
+		}
+		if m.ready {
+			m.syncHistory()
+		}
+		return
+	}
+	if m.historyWorkflowName == trimmed && m.historyScope == historyScopeWorkflow {
 		return
 	}
 	m.historyWorkflowName = trimmed
+	m.historyScope = historyScopeWorkflow
 	if m.ready {
 		m.syncHistory()
 	}

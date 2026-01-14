@@ -1054,7 +1054,18 @@ func (m Model) buildTabRowContent(
 	return ""
 }
 
-var tabSpinFrames = []string{"⠋", "⠙", "⠹"}
+var tabSpinFrames = []string{
+	"⠋",
+	"⠙",
+	"⠹",
+	"⠸",
+	"⠼",
+	"⠴",
+	"⠦",
+	"⠧",
+	"⠇",
+	"⠏",
+}
 
 const responseSendingBase = "Sending request"
 
@@ -1062,7 +1073,7 @@ func (m Model) tabSpinner() string {
 	if !m.sending || len(tabSpinFrames) == 0 {
 		return ""
 	}
-	idx := m.statusPulseFrame
+	idx := m.tabSpinIdx
 	if idx < 0 {
 		idx = 0
 	}
@@ -1253,12 +1264,32 @@ func (m Model) renderHistoryPaneFor(id responsePaneID) string {
 
 	contentWidth := maxInt(pane.viewport.Width, 1)
 	contentHeight := maxInt(pane.viewport.Height, 1)
+	header := m.renderHistoryHeader(contentWidth)
+	filter := m.renderHistoryFilterLine(contentWidth)
+	filterSep := dividerLine(m.theme.PaneDivider, contentWidth)
+	bodyHeight := contentHeight - m.historyHeaderHeight()
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
 
 	if len(m.historyEntries) == 0 {
-		body := lipgloss.NewStyle().
+		msg := lipgloss.NewStyle().
+			MaxWidth(contentWidth).
+			MaxHeight(bodyHeight).
+			Render(m.historyEmptyMessage())
+		listView := lipgloss.Place(
+			contentWidth,
+			bodyHeight,
+			lipgloss.Top,
+			lipgloss.Left,
+			msg,
+			lipgloss.WithWhitespaceChars(" "),
+		)
+		body := lipgloss.JoinVertical(lipgloss.Left, header, filter, filterSep, listView)
+		body = lipgloss.NewStyle().
 			MaxWidth(contentWidth).
 			MaxHeight(contentHeight).
-			Render("No history yet. Execute a request to populate this view.")
+			Render(body)
 		return lipgloss.Place(
 			contentWidth,
 			contentHeight,
@@ -1272,9 +1303,9 @@ func (m Model) renderHistoryPaneFor(id responsePaneID) string {
 	listView := m.historyList.View()
 	listView = lipgloss.NewStyle().
 		MaxWidth(contentWidth).
+		MaxHeight(bodyHeight).
 		Render(listView)
-
-	body := layoutHistoryContent(listView, "", contentHeight)
+	body := lipgloss.JoinVertical(lipgloss.Left, header, filter, filterSep, listView)
 	body = lipgloss.NewStyle().
 		MaxWidth(contentWidth).
 		MaxHeight(contentHeight).
@@ -1290,52 +1321,21 @@ func (m Model) renderHistoryPaneFor(id responsePaneID) string {
 	)
 }
 
-func layoutHistoryContent(listView, snippetView string, maxHeight int) string {
-	height := maxInt(maxHeight, 1)
-	if snippetView == "" {
-		return lipgloss.NewStyle().
-			MaxHeight(height).
-			Render(listView)
-	}
+func (m Model) renderHistoryHeader(width int) string {
+	scope := historyScopeLabel(m.historyScope)
+	sortLabel := historySortLabel(m.historySort)
+	text := fmt.Sprintf("Scope (c): %s  Sort (s): %s", scope, sortLabel)
+	return m.theme.HeaderValue.Width(width).MaxHeight(1).Render(text)
+}
 
-	snippet := lipgloss.NewStyle().
-		MaxHeight(height).
-		Render(snippetView)
-	snippetHeight := lipgloss.Height(snippet)
-	if snippetHeight >= height {
-		return snippet
+func (m Model) renderHistoryFilterLine(width int) string {
+	input := m.historyFilterInput
+	if width > 2 {
+		input.Width = width - 2
+	} else {
+		input.Width = width
 	}
-
-	listHeight := height - snippetHeight
-	if listHeight <= 0 {
-		return snippet
-	}
-
-	trimmedList := lipgloss.NewStyle().
-		MaxHeight(listHeight).
-		Render(listView)
-	trimmedListHeight := lipgloss.Height(trimmedList)
-	if trimmedListHeight == 0 {
-		return snippet
-	}
-
-	remaining := height - trimmedListHeight
-	if remaining <= 0 {
-		return trimmedList
-	}
-
-	trimmedSnippet := lipgloss.NewStyle().
-		MaxHeight(remaining).
-		Render(snippet)
-	if lipgloss.Height(trimmedSnippet) == 0 {
-		return trimmedList
-	}
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		trimmedList,
-		trimmedSnippet,
-	)
+	return lipgloss.NewStyle().Width(width).Render(input.View())
 }
 
 func clampPositive(value, maxValue int) int {
@@ -1362,12 +1362,14 @@ func (m Model) renderCommandBar() string {
 	}
 	segments := []hint{
 		{key: "Tab", label: "Focus"},
-		{key: "Enter", label: "Run"},
-		{key: "Ctrl+Enter", label: "Send"},
-		{key: "Ctrl+S", label: "Save"},
-		{key: "Ctrl+N", label: "New File"},
-		{key: "Ctrl+O", label: "Open"},
-		{key: "Ctrl+Q", label: "Quit"},
+		{key: "Enter", label: "Run/Send"},
+		{key: "^C", label: "Cancel"},
+		{key: "^S", label: "Save"},
+		{key: "^N", label: "New"},
+		{key: "^O", label: "Open"},
+		{key: "^Q", label: "Quit"},
+		{key: "g s/v", label: "Split"},
+		{key: "g1/2/3", label: "Minimize"},
 		{key: "?", label: "Help"},
 	}
 
@@ -1668,18 +1670,24 @@ func (m Model) renderHeader() string {
 	}
 
 	separator := m.theme.HeaderSeparator.Render(" ")
-	joined := segments[0]
-	for i := 1; i < len(segments); i++ {
-		joined = lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			joined,
-			separator,
-			segments[i],
-		)
+
+	rightText := ""
+	rightStyle := m.theme.HeaderValue
+	if m.latencySeries != nil {
+		rightText = m.latencyText()
+		rightStyle = m.latencyStyle()
 	}
 
-	width := maxInt(m.width, lipgloss.Width(joined))
-	return m.theme.Header.Width(width).Render(joined)
+	totalWidth := maxInt(m.width, 1)
+	contentWidth := headerContentWidth(totalWidth, m.theme.Header)
+	headerLine := buildHeaderLine(
+		segments,
+		separator,
+		rightText,
+		rightStyle,
+		contentWidth,
+	)
+	return m.theme.Header.Width(totalWidth).Render(headerLine)
 }
 
 func (m Model) renderHeaderButton(idx int, label, value string) string {
@@ -2543,7 +2551,7 @@ func (m Model) renderHelpOverlay() string {
 						},
 						"gg / G",
 					),
-					"Response tab: top / bottom",
+					"Response/History tab: top / bottom",
 				},
 				{
 					m.helpActionKey(bindings.ActionToggleHeaderPreview, "g Shift+H"),
@@ -2590,6 +2598,20 @@ func (m Model) renderHelpOverlay() string {
 			}),
 		},
 		{
+			title: "History",
+			entries: sortedHelpEntries([]helpEntry{
+				{"c", "History: cycle scope"},
+				{"s", "History: toggle sort"},
+				{"/", "History: filter (Enter apply, Esc clear)"},
+				{"Space", "History: toggle selection"},
+				{"PgUp / PgDn", "History: prev / next page"},
+				{"Enter", "History: load entry"},
+				{"p", "History: preview entry"},
+				{"d", "History: delete selection"},
+				{"r", "History: replay entry"},
+			}),
+		},
+		{
 			title: "Environment & Themes",
 			entries: sortedHelpEntries([]helpEntry{
 				{m.helpActionKey(bindings.ActionShowGlobals, "Ctrl+G"), "Show globals summary"},
@@ -2612,13 +2634,13 @@ func (m Model) renderHelpOverlay() string {
 			title: "Editor motions",
 			entries: []helpEntry{
 				{"h / j / k / l", "Move left / down / up / right"},
-				{"w / b / e", "Next word / previous word / word end"},
+				{"w / b / e", "Word forward / back / end (W / B / E for WORD)"},
 				{"0 / ^ / $", "Line start / first non-blank / line end"},
 				{"gg / G", "Top / bottom of buffer"},
 				{"Ctrl+f / Ctrl+b", "Page down / up (Ctrl+d / Ctrl+u half-page)"},
 				{"v / V / y", "Visual select (char / line) / yank selection"},
-				{"d + motion", "Delete via Vim motions (dw, db, dk, dgg, dG)"},
-				{"dd / D / x / c", "Delete line / to end / char / change line"},
+				{"d / c + motion", "Delete / change via Vim motions (dw, db, cw, c$)"},
+				{"dd / D / x / cc", "Delete line / to end / char / change line"},
 				{"a", "Append after cursor (enter insert mode)"},
 				{"p / P", "Paste after / before cursor"},
 				{"f / t / T", "Find character (forward / till / backward)"},

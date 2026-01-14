@@ -2,6 +2,59 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.18.3](https://github.com/unkn0wn-root/resterm/compare/v0.18.2...v0.18.3) (2026-01-14)
+
+### [0.18.2](https://github.com/unkn0wn-root/resterm/compare/v0.18.1...v0.18.2) (2026-01-13)
+
+### [0.18.1](https://github.com/unkn0wn-root/resterm/compare/v0.17.2...v0.18.1) (2026-01-13)
+
+
+### Features
+
+* extend std lib and docs ([326c536](https://github.com/unkn0wn-root/resterm/commit/326c5362340edbe730617e70c766d898a5caebd2))
+
+### [0.17.2](https://github.com/unkn0wn-root/resterm/compare/v0.17.1...v0.17.2) (2026-01-13)
+
+
+### Bug Fixes
+
+* **textarea:** normalize crlf input ([374c72b](https://github.com/unkn0wn-root/resterm/commit/374c72b7bca8699a13254febcbe2a99b5f915e78))
+
+### [0.17.1](https://github.com/unkn0wn-root/resterm/compare/v0.16.3...v0.17.1) (2026-01-11)
+
+### [0.16.3](https://github.com/unkn0wn-root/resterm/compare/v0.16.2...v0.16.3) (2026-01-10)
+
+### [0.16.2](https://github.com/unkn0wn-root/resterm/compare/v0.16.1...v0.16.2) (2026-01-10)
+
+### [0.16.1](https://github.com/unkn0wn-root/resterm/compare/v0.16.0...v0.16.1) (2026-01-09)
+
+
+### Features
+
+* add latency ascii to headers ([7bb18e1](https://github.com/unkn0wn-root/resterm/commit/7bb18e1d5f4b3df7c9dc74ead41f1ba1c0bfb2cd))
+* **history:** add 'gg' and 'G' to jump to first and last and PageUp/Down to jump between pages ([96b2259](https://github.com/unkn0wn-root/resterm/commit/96b225946b0deef833a5bb70d093e1832be0a8ff))
+* sending request brings back response tab when minimized ([1872d3a](https://github.com/unkn0wn-root/resterm/commit/1872d3a3b422bb65779eb89ffa94c599d68b118a))
+* use status message for unnamed requests in global/file scope ([8eecf3d](https://github.com/unkn0wn-root/resterm/commit/8eecf3d09284473a240a99af35471b46bece0202))
+
+
+### Bug Fixes
+
+* opening request unminimize editor ([6a261be](https://github.com/unkn0wn-root/resterm/commit/6a261beebb6ede3ab8b9bbaecb4c438ce1c6b54d))
+
+## [0.16.0](https://github.com/unkn0wn-root/resterm/compare/v0.15.2...v0.16.0) (2026-01-09)
+
+### [0.15.2](https://github.com/unkn0wn-root/resterm/compare/v0.15.1...v0.15.2) (2026-01-08)
+
+### [0.15.1](https://github.com/unkn0wn-root/resterm/compare/v0.15.0...v0.15.1) (2026-01-07)
+
+
+### Bug Fixes
+
+* **editor:** align P paste with Vim semantics ([8b449b2](https://github.com/unkn0wn-root/resterm/commit/8b449b29c55eb04e8f97dbf89e675118cb8ac332))
+* **editor:** make visual mode include caret rune for selection ([e20006c](https://github.com/unkn0wn-root/resterm/commit/e20006c6526673b3bc24952350cfb643a104b3d0))
+* **editor:** Vim word motions in editor ([3c9bcc4](https://github.com/unkn0wn-root/resterm/commit/3c9bcc4212b3d0802033481cab06f1afdc149e61))
+* **textarea:** apply sidescroll margin before overflow ([1b9c7ee](https://github.com/unkn0wn-root/resterm/commit/1b9c7ee25a23674d26662e0ae98f7580b377f208))
+
 ## [0.15.0](https://github.com/unkn0wn-root/resterm/compare/v0.14.2...v0.15.0) (2026-01-03)
 
 

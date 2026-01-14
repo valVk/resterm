@@ -115,7 +115,7 @@ func (m *Model) startProfileRun(
 	state.messageBase = fmt.Sprintf("Profiling %s", title)
 
 	m.profileRun = state
-	m.sending = true
+	spin := m.startSending()
 	m.statusPulseBase = strings.TrimSpace(profileProgressLabel(state))
 	m.statusPulseFrame = 0
 
@@ -126,25 +126,22 @@ func (m *Model) startProfileRun(
 		},
 	)
 
-	var batchCmds []tea.Cmd
 	execCmd := m.executeProfileIteration()
-	batchCmds = append(batchCmds, execCmd)
+
+	// Build command batch with extension hook
+	cmds := []tea.Cmd{execCmd}
 
 	// Extension OnRequestStart hook
 	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
 		if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
-			batchCmds = append(batchCmds, cmd)
+			cmds = append(cmds, cmd)
 		}
 	}
 
-	if tick := m.startStatusPulse(); tick != nil {
-		batchCmds = append(batchCmds, tick)
-	}
+	pulse := m.startStatusPulse()
+	cmds = append(cmds, pulse, spin)
 
-	if len(batchCmds) > 0 {
-		return tea.Batch(batchCmds...)
-	}
-	return nil
+	return batchCmds(cmds)
 }
 
 func (m *Model) executeProfileIteration() tea.Cmd {
@@ -209,7 +206,7 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 		if hadCurrent && state.index < state.total {
 			state.index++
 		}
-		m.sending = false
+		m.stopSending()
 		return m.finalizeProfileRun(msg, state)
 	}
 
@@ -221,7 +218,7 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 		m.lastError = nil
 		m.lastResponse = nil
 		m.lastGRPC = nil
-		m.sending = false
+		m.stopSending()
 		return m.finalizeProfileRun(msg, state)
 	}
 
@@ -265,14 +262,15 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 		progressText := profileProgressLabel(state)
 		m.statusPulseBase = progressText
 		m.setStatusMessage(statusMsg{text: progressText, level: statusInfo})
-		m.sending = true
+		spin := m.startSending()
 		if state.delay > 0 {
-			var delayCmds []tea.Cmd
 			next := tea.Tick(
 				state.delay,
 				func(time.Time) tea.Msg { return profileNextIterationMsg{} },
 			)
-			delayCmds = append(delayCmds, next)
+
+			// Build command batch with extension hook
+			delayCmds := []tea.Cmd{next}
 
 			// Extension OnRequestStart hook
 			if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
@@ -281,18 +279,16 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 				}
 			}
 
-			if tick := m.startStatusPulse(); tick != nil {
-				delayCmds = append(delayCmds, tick)
-			}
-			if len(delayCmds) > 0 {
-				return tea.Batch(delayCmds...)
-			}
-			return nil
+			pulse := m.startStatusPulse()
+			delayCmds = append(delayCmds, pulse, spin)
+
+			return batchCmds(delayCmds)
 		}
 
-		var execCmds []tea.Cmd
 		exec := m.executeProfileIteration()
-		execCmds = append(execCmds, exec)
+
+		// Build command batch with extension hook
+		execCmds := []tea.Cmd{exec}
 
 		// Extension OnRequestStart hook
 		if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
@@ -301,13 +297,10 @@ func (m *Model) handleProfileResponse(msg responseMsg) tea.Cmd {
 			}
 		}
 
-		if tick := m.startStatusPulse(); tick != nil {
-			execCmds = append(execCmds, tick)
-		}
-		if len(execCmds) > 0 {
-			return tea.Batch(execCmds...)
-		}
-		return nil
+		pulse := m.startStatusPulse()
+		execCmds = append(execCmds, pulse, spin)
+
+		return batchCmds(execCmds)
 	}
 
 	return m.finalizeProfileRun(msg, state)
@@ -362,7 +355,7 @@ func profileProgressLabel(state *profileState) string {
 
 func (m *Model) finalizeProfileRun(msg responseMsg, state *profileState) tea.Cmd {
 	m.profileRun = nil
-	m.sending = false
+	m.stopSending()
 	m.stopStatusPulseIfIdle()
 
 	report := ""

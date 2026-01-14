@@ -18,12 +18,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/unkn0wn-root/resterm/internal/curl"
 	"github.com/unkn0wn-root/resterm/internal/errdef"
 	"github.com/unkn0wn-root/resterm/internal/grpcclient"
 	"github.com/unkn0wn-root/resterm/internal/httpclient"
 	"github.com/unkn0wn-root/resterm/internal/oauth"
 	"github.com/unkn0wn-root/resterm/internal/parser"
-	"github.com/unkn0wn-root/resterm/internal/parser/curl"
 	"github.com/unkn0wn-root/resterm/internal/restfile"
 	"github.com/unkn0wn-root/resterm/internal/rts"
 	"github.com/unkn0wn-root/resterm/internal/scripts"
@@ -96,7 +96,7 @@ func (m *Model) cancelRuns(status string) tea.Cmd {
 		status = "Canceling..."
 	}
 
-	m.sending = false
+	m.stopSending()
 	m.stopStatusPulse()
 
 	var cmds []tea.Cmd
@@ -174,6 +174,11 @@ func (m *Model) sendActiveRequest() tea.Cmd {
 		}
 	}
 
+	rc := m.restorePane(paneRegionResponse)
+	wrap := func(cmd tea.Cmd) tea.Cmd {
+		return batchCommands(rc, cmd)
+	}
+
 	m.doc = doc
 	m.syncRequestList(doc)
 	m.setActiveRequest(req)
@@ -193,13 +198,13 @@ func (m *Model) sendActiveRequest() tea.Cmd {
 			m.setStatusMessage(
 				statusMsg{level: statusWarn, text: "@compare cannot run alongside @for-each"},
 			)
-			return nil
+			return wrap(nil)
 		}
 		if cloned.Metadata.Profile != nil {
 			m.setStatusMessage(
 				statusMsg{level: statusWarn, text: "@profile cannot run alongside @for-each"},
 			)
-			return nil
+			return wrap(nil)
 		}
 		if cloned.Metadata.Trace != nil && cloned.Metadata.Trace.Enabled {
 			options.Trace = true
@@ -207,7 +212,7 @@ func (m *Model) sendActiveRequest() tea.Cmd {
 				options.TraceBudget = &budget
 			}
 		}
-		return m.startForEachRun(doc, cloned, options)
+		return wrap(m.startForEachRun(doc, cloned, options))
 	}
 
 	if spec := m.compareSpecForRequest(cloned); spec != nil {
@@ -215,9 +220,9 @@ func (m *Model) sendActiveRequest() tea.Cmd {
 			m.setStatusMessage(
 				statusMsg{level: statusWarn, text: "@compare cannot run alongside @profile"},
 			)
-			return nil
+			return wrap(nil)
 		}
-		return m.startCompareRun(doc, cloned, spec, options)
+		return wrap(m.startCompareRun(doc, cloned, spec, options))
 	}
 
 	if cloned.Metadata.Trace != nil && cloned.Metadata.Trace.Enabled {
@@ -228,10 +233,10 @@ func (m *Model) sendActiveRequest() tea.Cmd {
 	}
 
 	if cloned.Metadata.Profile != nil {
-		return m.startProfileRun(doc, cloned, options)
+		return wrap(m.startProfileRun(doc, cloned, options))
 	}
 
-	m.sending = true
+	spin := m.startSending()
 	target := m.statusRequestTarget(doc, cloned, "")
 	base := "Sending"
 	if trimmed := strings.TrimSpace(target); trimmed != "" {
@@ -242,24 +247,21 @@ func (m *Model) sendActiveRequest() tea.Cmd {
 	m.setStatusMessage(statusMsg{text: base, level: statusInfo})
 
 	execCmd := m.executeRequest(doc, cloned, options, "", nil)
-	var batchCmds []tea.Cmd
-	batchCmds = append(batchCmds, execCmd)
+
+	// Build command batch with extension hook
+	cmds := []tea.Cmd{execCmd}
 
 	// Extension OnRequestStart hook
 	if ext := m.GetExtensions(); ext != nil && ext.Hooks != nil && ext.Hooks.OnRequestStart != nil {
 		if cmd := ext.Hooks.OnRequestStart(m); cmd != nil {
-			batchCmds = append(batchCmds, cmd)
+			cmds = append(cmds, cmd)
 		}
 	}
 
-	if tick := m.startStatusPulse(); tick != nil {
-		batchCmds = append(batchCmds, tick)
-	}
+	pulse := m.startStatusPulse()
+	cmds = append(cmds, pulse, spin)
 
-	if len(batchCmds) > 0 {
-		return tea.Batch(batchCmds...)
-	}
-	return nil
+	return batchCmds(cmds)
 }
 
 // Allow CLI-level compare flags to kick off a sweep even when the request lacks
@@ -885,11 +887,24 @@ func grpcScriptResponse(req *restfile.Request, resp *grpcclient.Response) *scrip
 	}
 }
 
-const statusPulseInterval = 1 * time.Second
+const (
+	statusPulseInterval = 1 * time.Second
+	tabSpinInterval     = 100 * time.Millisecond
+)
 const (
 	streamHeaderType    = "X-Resterm-Stream-Type"
 	streamHeaderSummary = "X-Resterm-Stream-Summary"
 )
+
+func (m *Model) startSending() tea.Cmd {
+	m.sending = true
+	return m.startTabSpin()
+}
+
+func (m *Model) stopSending() {
+	m.sending = false
+	m.stopTabSpin()
+}
 
 func (m *Model) stopStatusPulse() {
 	m.statusPulseOn = false
@@ -922,6 +937,46 @@ func (m *Model) startStatusPulse() tea.Cmd {
 	m.statusPulseSeq++
 	m.statusPulseFrame = 0
 	return m.scheduleStatusPulse()
+}
+
+func (m *Model) stopTabSpin() {
+	m.tabSpinOn = false
+	m.tabSpinIdx = 0
+}
+
+func (m *Model) scheduleTabSpin() tea.Cmd {
+	if !m.tabSpinOn || !m.sending || len(tabSpinFrames) == 0 {
+		return nil
+	}
+	seq := m.tabSpinSeq
+	return tea.Tick(tabSpinInterval, func(time.Time) tea.Msg {
+		return tabSpinMsg{seq: seq}
+	})
+}
+
+func (m *Model) startTabSpin() tea.Cmd {
+	if m.tabSpinOn || !m.sending || len(tabSpinFrames) == 0 {
+		return nil
+	}
+	m.tabSpinOn = true
+	m.tabSpinSeq++
+	m.tabSpinIdx = 0
+	return m.scheduleTabSpin()
+}
+
+func (m *Model) handleTabSpin(msg tabSpinMsg) tea.Cmd {
+	if msg.seq != m.tabSpinSeq {
+		return nil
+	}
+	if !m.tabSpinOn || !m.sending || len(tabSpinFrames) == 0 {
+		m.stopTabSpin()
+		return nil
+	}
+	m.tabSpinIdx++
+	if m.tabSpinIdx >= len(tabSpinFrames) {
+		m.tabSpinIdx = 0
+	}
+	return m.scheduleTabSpin()
 }
 
 func (m *Model) handleStatusPulse(msg statusPulseMsg) tea.Cmd {
@@ -2700,142 +2755,7 @@ func inlineCurlRequest(lines []string, lineNumber int) *restfile.Request {
 }
 
 func extractCurlCommand(lines []string, cursorIdx int) (start int, end int, command string) {
-	start = -1
-	for i := cursorIdx; i >= 0; i-- {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == "" {
-			if i == cursorIdx {
-				continue
-			}
-			break
-		}
-		if isCurlStartLine(trimmed) {
-			start = i
-			break
-		}
-	}
-	if start == -1 {
-		return -1, -1, ""
-	}
-
-	qs := &curlQuoteState{}
-	var b strings.Builder
-	end = start
-	for i := start; i < len(lines); i++ {
-		line := lines[i]
-		openBefore := qs.open()
-		if strings.TrimSpace(line) == "" && i > start && !openBefore {
-			break
-		}
-
-		seg := line
-		if !openBefore {
-			seg = strings.TrimLeft(seg, " \t")
-		}
-		if !openBefore {
-			seg = strings.TrimRight(seg, " \t")
-		}
-		if seg == "" {
-			seg = ""
-		}
-
-		cont := curlLineContinues(seg)
-		if cont {
-			seg = seg[:len(seg)-1]
-		}
-
-		if b.Len() > 0 {
-			if openBefore {
-				b.WriteByte('\n')
-			} else {
-				b.WriteByte(' ')
-			}
-		}
-
-		b.WriteString(seg)
-		qs.consume(seg)
-		end = i
-		if cont {
-			qs.resetEscape()
-			continue
-		}
-		if qs.open() {
-			continue
-		}
-		break
-	}
-
-	return start, end, strings.TrimSpace(b.String())
-}
-
-type curlQuoteState struct {
-	ins bool
-	ind bool
-	esc bool
-}
-
-func (s *curlQuoteState) consume(v string) {
-	for _, r := range v {
-		if s.esc {
-			s.esc = false
-			continue
-		}
-		switch r {
-		case '\\':
-			if s.ins {
-				continue
-			}
-			s.esc = true
-		case '\'':
-			if s.ind {
-				continue
-			}
-			s.ins = !s.ins
-		case '"':
-			if s.ins {
-				continue
-			}
-			s.ind = !s.ind
-		}
-	}
-}
-
-func (s *curlQuoteState) open() bool {
-	return s.ins || s.ind
-}
-
-func (s *curlQuoteState) resetEscape() {
-	s.esc = false
-}
-
-func curlLineContinues(v string) bool {
-	if v == "" {
-		return false
-	}
-	count := 0
-	for i := len(v) - 1; i >= 0 && v[i] == '\\'; i-- {
-		count++
-	}
-	return count%2 == 1
-}
-
-func isCurlStartLine(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	trimmed = strings.TrimPrefix(trimmed, "sudo ")
-	trimmed = strings.TrimSpace(trimmed)
-	if strings.HasPrefix(trimmed, "curl ") || trimmed == "curl" {
-		return true
-	}
-	for _, prefix := range []string{"$", "%", ">", "!"} {
-		prefixed := prefix + " "
-		if strings.HasPrefix(trimmed, prefixed) {
-			candidate := strings.TrimSpace(trimmed[len(prefixed):])
-			if strings.HasPrefix(candidate, "curl ") || candidate == "curl" {
-				return true
-			}
-		}
-	}
-	return false
+	return curl.ExtractCommand(lines, cursorIdx)
 }
 
 func inlineRequestFromLine(raw string, lineNumber int) *restfile.Request {

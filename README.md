@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <strong>Resterm Script</strong>
+  <strong>Workflows</strong>
 </p>
 
 <p align="center">
-  <img src="_media/resterm_script.png" alt="Screenshot of resterm with resterm rcript" width="720" />
+  <img src="_media/resterm_workflow.png" alt="Screenshot of resterm TUI with Workflow" width="720" />
 </p>
 
 <p align="center">
@@ -25,19 +25,19 @@
 </p>
 
 <p align="center">
-  <strong>Workflows</strong>
-</p>
-
-<p align="center">
-  <img src="_media/resterm_workflow.png" alt="Screenshot of resterm TUI with Workflow" width="720" />
-</p>
-
-<p align="center">
   <strong>Profiler</strong>
 </p>
 
 <p align="center">
   <img src="_media/resterm_profiler.png" alt="Screenshot of resterm profiler" width="720" />
+</p>
+
+<p align="center">
+  <strong>Resterm Script</strong>
+</p>
+
+<p align="center">
+  <img src="_media/resterm_script.png" alt="Screenshot of resterm with resterm rcript" width="720" />
 </p>
 
 <p align="center">
@@ -323,7 +323,7 @@ If you copied the command from a shell, prefixes like `sudo` or `$` are ignored 
 ## Quick Configuration Overview
 
 - **Environments:** JSON files (`resterm.env.json`) are auto-discovered in the request directory, workspace root, or CWD. Dotenv files (`.env`, `.env.*`) are opt-in via `--env-file` and are single-workspace; prefer JSON when you need multiple environments in one file.
-- **Flags you probebly reach for most:** `--workspace`, `--file`, `--env`, `--env-file`, `--timeout`, `--insecure`, `--follow`, `--proxy`, `--recursive`, `--from-openapi`, `--http-out` (see docs for the full list).
+- **Flags you probebly reach for most:** `--workspace`, `--file`, `--env`, `--env-file`, `--timeout`, `--insecure`, `--follow`, `--proxy`, `--recursive`, `--from-curl`, `--from-openapi`, `--http-out` (see docs for the full list).
 - **Config storage:** `$HOME/Library/Application Support/resterm`, `%APPDATA%\resterm`, or `$HOME/.config/resterm` (override with `RESTERM_CONFIG_DIR`). Themes and keybindings live under this directory when you customize them.
 
 ## RestermScript
@@ -352,6 +352,7 @@ Full reference: [`docs/restermscript.md`](docs/restermscript.md).
 - **Tracing & timeline:** Add `@trace` with budgets to capture DNS/connect/TLS/TTFB/transfer timings, visualize overruns, and optionally export spans to OpenTelemetry. Docs: [`docs/resterm.md#timeline--tracing`](./docs/resterm.md#timeline--tracing).
 - **Streaming (WebSocket & SSE):** Use `@websocket` + `@ws` steps or `@sse` to script and record streams. The Stream tab keeps transcripts and an interactive console. Docs: [`docs/resterm.md#streaming-sse--websocket`](./docs/resterm.md#streaming-sse--websocket).
 - **gRPC streaming:** Unary and streaming calls (client/server/bidi) with Stream tab transcripts, plus template expansion for gRPC body files. Docs: [`docs/resterm.md#grpc`](./docs/resterm.md#grpc).
+- **Curl import:** Convert curl commands or files into `.http` from the CLI (`--from-curl`). Docs: [`docs/resterm.md#importing-curl-commands`](./docs/resterm.md#importing-curl-commands).
 - **OpenAPI import:** Convert an OpenAPI 3 spec into `.http` collections from the CLI (`--from-openapi`). Docs: [`docs/resterm.md#importing-openapi-specs`](./docs/resterm.md#importing-openapi-specs).
 - **Theming & bindings:** Optional customization via `themes/*.toml` and `bindings.toml/json` under the config dir; defaults are ready to use. Docs: [`docs/resterm.md#theming`](./docs/resterm.md#theming) and [`docs/resterm.md#custom-bindings`](./docs/resterm.md#custom-bindings).
 
