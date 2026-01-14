@@ -4,6 +4,10 @@ package scroll
 // If set, this function will be called instead of the default Align logic.
 var AlignOverride func(sel, off, h, total int) (offset int, override bool)
 
+// RevealOverride allows extensions to provide custom reveal behavior.
+// If set, this function will be called instead of the default Reveal logic.
+var RevealOverride func(start, end, off, h, total int) (offset int, override bool)
+
 // Align returns a y-offset that keeps the selection away from viewport edges.
 // It behaves like a lightweight scrolloff: nudge just enough to keep a small buffer.
 func Align(sel, off, h, total int) int {
@@ -67,6 +71,12 @@ func clamp(v, lo, hi int) int {
 // with a small buffer above and below when possible. If the span is already
 // comfortably visible, the current offset is returned.
 func Reveal(start, end, off, h, total int) int {
+	// Check for extension override
+	if RevealOverride != nil {
+		if offset, override := RevealOverride(start, end, off, h, total); override {
+			return offset
+		}
+	}
 	if h <= 0 || total <= 0 {
 		return 0
 	}

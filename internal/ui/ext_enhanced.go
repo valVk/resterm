@@ -10,6 +10,7 @@ import (
 // This keeps enhanced data separate from the core Model struct.
 type enhancedData struct {
 	lastEditorCursorLine int
+	needsRevealOnNextUpdate bool
 }
 
 // InstallEnhanced sets up all enhanced UI features.
@@ -34,8 +35,9 @@ func InstallEnhanced(m *Model) {
 	// Hide editor by default
 	m.editorCollapsed = true
 
-	// Install typewriter mode scroll override
+	// Install typewriter mode scroll overrides
 	scroll.AlignOverride = typewriterScrollAlign
+	scroll.RevealOverride = typewriterScrollReveal
 }
 
 // typewriterScrollAlign implements true typewriter mode scrolling.
@@ -73,6 +75,48 @@ func typewriterScrollAlign(sel, off, h, total int) (offset int, override bool) {
 	return targetOff, true
 }
 
+// typewriterScrollReveal implements typewriter mode for revealing spans.
+// When revealing a request, center it in the viewport instead of using the default buffer.
+func typewriterScrollReveal(start, end, off, h, total int) (offset int, override bool) {
+	if h <= 0 || total <= 0 {
+		return 0, false
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	if end >= total {
+		end = total - 1
+	}
+	if h > total {
+		h = total
+	}
+	maxOff := total - h
+	if maxOff < 0 {
+		maxOff = 0
+	}
+
+	// Typewriter mode: center the span in the viewport
+	// Calculate the middle of the span
+	spanMiddle := (start + end) / 2
+
+	// Position viewport so span is centered
+	center := h / 2
+	targetOff := spanMiddle - center
+
+	// Clamp to valid range
+	if targetOff < 0 {
+		targetOff = 0
+	}
+	if targetOff > maxOff {
+		targetOff = maxOff
+	}
+
+	return targetOff, true
+}
+
 // getEnhancedData safely retrieves the enhanced extension data from the model.
 func getEnhancedData(m *Model) *enhancedData {
 	ext := m.GetExtensions()
@@ -89,6 +133,21 @@ func getEnhancedData(m *Model) *enhancedData {
 // onUpdate handles extension-specific updates.
 // Main now handles request animations, so this is available for future extensions.
 func onUpdate(m *Model, msg tea.Msg) tea.Cmd {
+	data := getEnhancedData(m)
+	if data == nil {
+		return nil
+	}
+
+	// If we need to reveal after expanding editor, do it now if editor has proper height
+	if data.needsRevealOnNextUpdate && !m.collapseState(paneRegionEditor) && m.editor.Height() > 10 {
+		data.needsRevealOnNextUpdate = false
+		if m.currentRequest != nil {
+			// Move cursor to the request's @name line and center it in viewport
+			m.moveCursorToLine(m.currentRequest.LineRange.Start)
+			alignViewportToCursor(m)
+		}
+	}
+
 	return nil
 }
 
@@ -110,23 +169,36 @@ func statusBarExtras(m *Model) []string {
 	return nil
 }
 
+// alignViewportToCursor centers the viewport on the current cursor position.
+// This should be called after moveCursorToLine to properly center the cursor.
+func alignViewportToCursor(m *Model) {
+	cursorLine := m.editor.Line() // 0-based
+	h := m.editor.Height()
+	if h <= 0 {
+		return
+	}
+	total := m.editor.LineCount()
+	offset := scroll.Align(cursorLine, m.editor.ViewStart(), h, total)
+	m.editor.SetViewStart(offset)
+}
+
 // onNavigatorSelectionChange is called when the navigator selection changes.
 // This implements Navigation → Editor sync: when navigating requests,
 // the editor scrolls to show the selected request (only if editor is visible).
 func onNavigatorSelectionChange(m *Model) {
-	// Only sync if editor is visible (not collapsed)
-	if m.collapseState(paneRegionEditor) {
-		return
-	}
-
 	// Get the current active request
 	req := m.currentRequest
 	if req == nil {
 		return
 	}
 
-	// Scroll editor to show the request
-	m.revealRequestInEditor(req)
+	// Only sync if editor is visible with proper height
+	// If collapsed, we'll sync when revealing with 'r' or right arrow
+	if !m.collapseState(paneRegionEditor) && m.editor.Height() > 10 {
+		// Move cursor to the request's @name line and center it in viewport
+		m.moveCursorToLine(req.LineRange.Start)
+		alignViewportToCursor(m)
+	}
 }
 
 // handleCustomKey handles enhanced key bindings.
@@ -138,15 +210,25 @@ func handleCustomKey(m *Model, key string) (bool, tea.Cmd) {
 		// If collapsed: expand it first, then focus
 		// If already visible: just focus it
 		var cmds []tea.Cmd
-		if m.collapseState(paneRegionEditor) {
+		wasCollapsed := m.collapseState(paneRegionEditor)
+		if wasCollapsed {
 			// Editor is collapsed, so expand it
 			if cmd := m.togglePaneCollapse(paneRegionEditor); cmd != nil {
 				cmds = append(cmds, cmd)
+			}
+			// Mark that we need to reveal on next update (after editor has proper height)
+			if data := getEnhancedData(m); data != nil {
+				data.needsRevealOnNextUpdate = true
 			}
 		}
 		// Set focus to editor (whether it was collapsed or already visible)
 		if cmd := m.setFocus(focusEditor); cmd != nil {
 			cmds = append(cmds, cmd)
+		}
+		// If editor was already visible, sync cursor immediately
+		if !wasCollapsed && m.currentRequest != nil {
+			m.moveCursorToLine(m.currentRequest.LineRange.Start)
+			alignViewportToCursor(m)
 		}
 		if len(cmds) > 0 {
 			return true, tea.Batch(cmds...)
@@ -157,15 +239,25 @@ func handleCustomKey(m *Model, key string) (bool, tea.Cmd) {
 		// This prevents conflict with navigator's right arrow usage
 		if m.focus == focusRequests || m.focus == focusFile || m.focus == focusWorkflows {
 			var cmds []tea.Cmd
-			if m.collapseState(paneRegionEditor) {
+			wasCollapsed := m.collapseState(paneRegionEditor)
+			if wasCollapsed {
 				// Editor is collapsed, so expand it
 				if cmd := m.togglePaneCollapse(paneRegionEditor); cmd != nil {
 					cmds = append(cmds, cmd)
+				}
+				// Mark that we need to reveal on next update (after editor has proper height)
+				if data := getEnhancedData(m); data != nil {
+					data.needsRevealOnNextUpdate = true
 				}
 			}
 			// Set focus to editor (whether it was collapsed or already visible)
 			if cmd := m.setFocus(focusEditor); cmd != nil {
 				cmds = append(cmds, cmd)
+			}
+			// If editor was already visible, sync cursor immediately
+			if !wasCollapsed && m.currentRequest != nil {
+				m.moveCursorToLine(m.currentRequest.LineRange.Start)
+				alignViewportToCursor(m)
 			}
 			if len(cmds) > 0 {
 				return true, tea.Batch(cmds...)
