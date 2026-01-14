@@ -138,13 +138,15 @@ func onUpdate(m *Model, msg tea.Msg) tea.Cmd {
 		return nil
 	}
 
-	// If we need to reveal after expanding editor, do it now if editor has proper height
-	if data.needsRevealOnNextUpdate && !m.collapseState(paneRegionEditor) && m.editor.Height() > 10 {
-		data.needsRevealOnNextUpdate = false
-		if m.currentRequest != nil {
-			// Move cursor to the request's @name line and center it in viewport
-			m.moveCursorToLine(m.currentRequest.LineRange.Start)
+	// If we need to align viewport after expanding editor, keep trying until we succeed
+	// Note: Cursor was already moved in handleCustomKey before focus was set
+	if data.needsRevealOnNextUpdate {
+		// Check if editor is now visible and has proper dimensions
+		if !m.collapseState(paneRegionEditor) && m.editor.Height() > 5 {
+			// Just align the viewport - cursor was already moved in handleCustomKey
 			alignViewportToCursor(m)
+			// Clear flag only after successful align
+			data.needsRevealOnNextUpdate = false
 		}
 	}
 
@@ -169,8 +171,50 @@ func statusBarExtras(m *Model) []string {
 	return nil
 }
 
+// moveCursorToLineNoSync moves the editor cursor to the target line
+// WITHOUT syncing the navigator. This is used when the navigator is already
+// at the correct position and we just need to move the editor cursor to match.
+func moveCursorToLineNoSync(m *Model, target int) {
+	if target < 1 {
+		target = 1
+	}
+	total := m.editor.LineCount()
+	if total == 0 {
+		return
+	}
+	if target > total {
+		target = total
+	}
+	current := m.editor.Line() + 1 // editor.Line() is 0-based
+	if current == target {
+		return
+	}
+
+	wasFocused := m.editor.Focused()
+	if !wasFocused {
+		_ = m.editor.Focus()
+	}
+	defer func() {
+		if !wasFocused {
+			m.editor.Blur()
+		}
+	}()
+
+	for current < target {
+		m.editor, _ = m.editor.Update(tea.KeyMsg{Type: tea.KeyDown})
+		current++
+	}
+	for current > target {
+		m.editor, _ = m.editor.Update(tea.KeyMsg{Type: tea.KeyUp})
+		current--
+	}
+	m.editor, _ = m.editor.Update(tea.KeyMsg{Type: tea.KeyHome})
+	// NOTE: We deliberately don't call syncNavigatorWithEditorCursor() here
+	// because the navigator is already at the correct position
+}
+
 // alignViewportToCursor centers the viewport on the current cursor position.
-// This should be called after moveCursorToLine to properly center the cursor.
+// This should be called after moveCursorToLineNoSync to properly center the cursor.
 func alignViewportToCursor(m *Model) {
 	cursorLine := m.editor.Line() // 0-based
 	h := m.editor.Height()
@@ -192,12 +236,20 @@ func onNavigatorSelectionChange(m *Model) {
 		return
 	}
 
-	// Only sync if editor is visible with proper height
-	// If collapsed, we'll sync when revealing with 'r' or right arrow
+	data := getEnhancedData(m)
+	if data == nil {
+		return
+	}
+
+	// If editor is visible with proper height, sync immediately
 	if !m.collapseState(paneRegionEditor) && m.editor.Height() > 10 {
 		// Move cursor to the request's @name line and center it in viewport
-		m.moveCursorToLine(req.LineRange.Start)
+		// Use NoSync version because navigator is already at correct position
+		moveCursorToLineNoSync(m, req.LineRange.Start)
 		alignViewportToCursor(m)
+	} else {
+		// Editor is collapsed, mark that we need to sync when it's revealed
+		data.needsRevealOnNextUpdate = true
 	}
 }
 
@@ -211,24 +263,33 @@ func handleCustomKey(m *Model, key string) (bool, tea.Cmd) {
 		// If already visible: just focus it
 		var cmds []tea.Cmd
 		wasCollapsed := m.collapseState(paneRegionEditor)
+
 		if wasCollapsed {
 			// Editor is collapsed, so expand it
 			if cmd := m.togglePaneCollapse(paneRegionEditor); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-			// Mark that we need to reveal on next update (after editor has proper height)
-			if data := getEnhancedData(m); data != nil {
-				data.needsRevealOnNextUpdate = true
+		}
+
+		// CRITICAL: Move cursor BEFORE setting focus to prevent main code from
+		// syncing navigator to old editor cursor position (model_update.go:506)
+		if m.currentRequest != nil {
+			moveCursorToLineNoSync(m, m.currentRequest.LineRange.Start)
+			// Don't align viewport yet if editor was collapsed - height might be wrong
+			// We'll align in onUpdate once editor has proper dimensions
+			if !wasCollapsed {
+				alignViewportToCursor(m)
+			} else {
+				// Mark that we need to align viewport on next update
+				if data := getEnhancedData(m); data != nil {
+					data.needsRevealOnNextUpdate = true
+				}
 			}
 		}
+
 		// Set focus to editor (whether it was collapsed or already visible)
 		if cmd := m.setFocus(focusEditor); cmd != nil {
 			cmds = append(cmds, cmd)
-		}
-		// If editor was already visible, sync cursor immediately
-		if !wasCollapsed && m.currentRequest != nil {
-			m.moveCursorToLine(m.currentRequest.LineRange.Start)
-			alignViewportToCursor(m)
 		}
 		if len(cmds) > 0 {
 			return true, tea.Batch(cmds...)
@@ -245,19 +306,27 @@ func handleCustomKey(m *Model, key string) (bool, tea.Cmd) {
 				if cmd := m.togglePaneCollapse(paneRegionEditor); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-				// Mark that we need to reveal on next update (after editor has proper height)
-				if data := getEnhancedData(m); data != nil {
-					data.needsRevealOnNextUpdate = true
+			}
+
+			// CRITICAL: Move cursor BEFORE setting focus to prevent main code from
+			// syncing navigator to old editor cursor position (model_update.go:506)
+			if m.currentRequest != nil {
+				moveCursorToLineNoSync(m, m.currentRequest.LineRange.Start)
+				// Don't align viewport yet if editor was collapsed - height might be wrong
+				// We'll align in onUpdate once editor has proper dimensions
+				if !wasCollapsed {
+					alignViewportToCursor(m)
+				} else {
+					// Mark that we need to align viewport on next update
+					if data := getEnhancedData(m); data != nil {
+						data.needsRevealOnNextUpdate = true
+					}
 				}
 			}
+
 			// Set focus to editor (whether it was collapsed or already visible)
 			if cmd := m.setFocus(focusEditor); cmd != nil {
 				cmds = append(cmds, cmd)
-			}
-			// If editor was already visible, sync cursor immediately
-			if !wasCollapsed && m.currentRequest != nil {
-				m.moveCursorToLine(m.currentRequest.LineRange.Start)
-				alignViewportToCursor(m)
 			}
 			if len(cmds) > 0 {
 				return true, tea.Batch(cmds...)
