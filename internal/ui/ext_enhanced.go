@@ -256,6 +256,11 @@ func onNavigatorSelectionChange(m *Model) {
 // handleCustomKey handles enhanced key bindings.
 // Returns true if the key was handled.
 func handleCustomKey(m *Model, key string) (bool, tea.Cmd) {
+	// Don't intercept keys when editor is in insert mode - let them pass through for typing
+	if m.editorInsertMode {
+		return false, nil
+	}
+
 	switch key {
 	case "r":
 		// 'r' = reveal editor and focus it
