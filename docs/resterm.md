@@ -308,7 +308,9 @@ When expanding `{{variable}}` templates, Resterm looks in:
 7. Selected environment JSON.
 8. OS environment variables (case-sensitive with an uppercase fallback).
 
-Dynamic helpers are also available: `{{$uuid}}` (alias `{{$guid}}`), `{{$timestamp}}` (Unix), `{{$timestampISO8601}}`, and `{{$randomInt}}`.
+Dynamic helpers are also available: `{{$uuid}}` (alias `{{$guid}}`), `{{$timestamp}}` (Unix seconds), `{{$timestampMs}}` (Unix milliseconds), `{{$timestampISO8601}}`, and `{{$randomInt}}`.
+
+Timestamp helpers accept optional offsets: `{{$timestamp + 6d}}`, `{{$timestampISO8601 - 90m}}`, `{{$timestampMs + 2h}}`. Supported units are the standard Go duration units plus `d` (days) and `w` (weeks).
 
 ---
 
@@ -454,7 +456,7 @@ RestermScript (RST) powers templates (`{{= ... }}`) and directive expressions. I
 
 | Directive | Syntax | Description |
 | --- | --- | --- |
-| `@use` | `# @use ./rts/helpers.rts as helpers` | Import an RST module (valid at file or request scope). |
+| `@use` | `# @use ./rts/helpers.rts [as helpers]` | Import an RST module (valid at file or request scope); the alias defaults to the module name. |
 | `@apply` | `# @apply {headers: {"X-Test": "1"}}` | Apply a patch to method/url/headers/query/body/vars before pre-request scripts. |
 | `@when` | `# @when vars.has("token")` | Run the request only when the expression is truthy. |
 | `@skip-if` | `# @skip-if env.mode == "dry-run"` | Skip the request when the expression is truthy. |
@@ -606,6 +608,7 @@ Key directives and tokens:
 - `vars.workflow.*` keys persist between steps and are available anywhere in the workflow as `{{vars.workflow.<name>}}`, letting later requests reuse or mutate shared context (e.g. `vars.workflow.userId`).
 - Unknown tokens on `@workflow` or `@step` are preserved in `Options`, allowing custom scripts or future features to consume them without changing the file format.
 - `expect.status` supports quoted or escaped values, so you can write `expect.status="201 Created"` alongside `expect.statuscode=201`.
+- `expect.status` / `expect.statuscode` require non-empty values, and `expect.statuscode` must be numeric.
 
 > **Tip:** Workflow assignments are expanded once when the request executes. If you need helpers such as `{{$uuid}}`, place them directly in the request/template or compute them via a pre-request script before assigning the value.
 > **Tip:** Options are parsed like CLI flags; wrap values in quotes or escape spaces (`\ `) to keep text together (e.g. `expect.status="201 Created"`).
@@ -1043,6 +1046,7 @@ When `header` is set to something other than `Authorization`, Resterm injects ju
 
 - Global defaults are passed via CLI flags (`--timeout`, `--follow`, `--insecure`, `--proxy`).
 - Per-request overrides use `@setting`, `@settings`, or `@timeout`.
+- HTTP version: `@setting http-version 1.1` (accepts `1.0`, `1.1`, `2`, `HTTP/1.1`, `HTTP/2`). A trailing `HTTP/1.1` on the request line also sets the version; explicit settings win. `2` is strict and fails if the response is not HTTP/2. WebSocket requests are incompatible with `1.0` and `2`.
 - Requests inherit a shared cookie jar; cookies persist across sessions.
 - TLS per request: `# @settings http-root-cas=a.pem http-client-cert=cert.pem http-client-key=key.pem http-insecure=true` for a single line, or `@setting key value` per line (`http-root-cas` accepts space/comma/semicolon separated lists; paths are relative). GraphQL/REST/WebSocket/SSE all share these HTTP settings.
 - Use `@no-log` to omit sensitive bodies from history snapshots.
@@ -1190,7 +1194,7 @@ text = "#eceff4"
 | Section | Keys | Notes |
 | --- | --- | --- |
 | `[metadata]` | `name`, `description`, `author`, `version`, `tags[]` | Informational only; shown in the selector. |
-| `[styles.*]` | `browser_border`, `editor_border`, `response_border`, `navigator_title`, `navigator_title_selected`, `navigator_subtitle`, `navigator_subtitle_selected`, `navigator_badge`, `navigator_tag`, `navigator_detail_title`, `navigator_detail_value`, `navigator_detail_dim`, `app_frame`, `header`, `header_title`, `header_value`, `header_separator`, `status_bar`, `status_bar_key`, `status_bar_value`, `command_bar`, `command_bar_hint`, `response_search_highlight`, `response_search_highlight_active`, `tabs`, `tab_active`, `tab_inactive`, `notification`, `error`, `success`, `header_brand`, `command_divider`, `pane_title`, `pane_title_file`, `pane_title_requests`, `pane_divider`, `editor_hint_box`, `editor_hint_item`, `editor_hint_selected`, `editor_hint_annotation`, `list_item_title`, `list_item_description`, `list_item_selected_title`, `list_item_selected_description`, `list_item_dimmed_title`, `list_item_dimmed_description`, `list_item_filter_match`, `response_content`, `response_content_raw`, `response_content_headers`, `stream_content`, `stream_timestamp`, `stream_direction_send`, `stream_direction_receive`, `stream_direction_info`, `stream_event_name`, `stream_data`, `stream_binary`, `stream_summary`, `stream_error`, `stream_console_title`, `stream_console_mode`, `stream_console_status`, `stream_console_prompt`, `stream_console_input`, `stream_console_input_focused` | Accept `foreground`, `background`, `border_color`, `border_background`, `border_style` (`normal`, `rounded`, `thick`, `double`, `ascii`, `block`), plus booleans `bold`, `italic`, `underline`, `faint`, `strikethrough`, and `align` (`left`, `center`, `right`). |
+| `[styles.*]` | `browser_border`, `editor_border`, `response_border`, `navigator_title`, `navigator_title_selected`, `navigator_subtitle`, `navigator_subtitle_selected`, `navigator_badge`, `navigator_tag`, `navigator_detail_title`, `navigator_detail_value`, `navigator_detail_dim`, `app_frame`, `header`, `header_title`, `header_value`, `header_separator`, `status_bar`, `status_bar_key`, `status_bar_value`, `command_bar`, `command_bar_hint`, `response_search_highlight`, `response_search_highlight_active`, `tabs`, `tab_active`, `tab_inactive`, `notification`, `error`, `success`, `header_brand`, `command_divider`, `pane_title`, `pane_title_file`, `pane_title_requests`, `pane_divider`, `editor_hint_box`, `editor_hint_item`, `editor_hint_selected`, `editor_hint_annotation`, `list_item_title`, `list_item_description`, `list_item_selected_title`, `list_item_selected_description`, `list_item_dimmed_title`, `list_item_dimmed_description`, `list_item_filter_match`, `response_content`, `response_content_raw`, `response_content_headers`, `response_selection`, `response_cursor`, `stream_content`, `stream_timestamp`, `stream_direction_send`, `stream_direction_receive`, `stream_direction_info`, `stream_event_name`, `stream_data`, `stream_binary`, `stream_summary`, `stream_error`, `stream_console_title`, `stream_console_mode`, `stream_console_status`, `stream_console_prompt`, `stream_console_input`, `stream_console_input_focused` | Accept `foreground`, `background`, `border_color`, `border_background`, `border_style` (`normal`, `rounded`, `thick`, `double`, `ascii`, `block`), plus booleans `bold`, `italic`, `underline`, `faint`, `strikethrough`, and `align` (`left`, `center`, `right`). |
 | `[colors]` | `pane_border_focus_file`, `pane_border_focus_requests`, `pane_active_foreground`, `method_get`, `method_post`, `method_put`, `method_patch`, `method_delete`, `method_head`, `method_options`, `method_grpc`, `method_ws`, `method_default` | Frequently reused colours for pane borders, active text, and method badges. |
 | `[editor_metadata]` | `comment_marker`, `directive_default`, `value`, `setting_key`, `setting_value`, `request_line`, `request_separator`, `[editor_metadata.directive_colors]` | Controls metadata highlighting inside the editor. |
 | `[[header_segments]]` | `background`, `foreground`, `border`, `accent` | Rotating header chips; add multiple tables for rotation. |
@@ -1203,7 +1207,7 @@ Use `editor_metadata.request_separator` for the `###` section dividers and `edit
 
 `styles.stream_*` keys control the transcript viewer (events, timestamps, direction badges). `styles.stream_console_*` tweak the interactive WebSocket console (prompt, status line, input field).
 
-`navigator_*` styles control the unified sidebar tree, and `styles.list_item_*` keys continue to power history/picker list rows. `styles.response_content`, `styles.response_content_raw`, and `styles.response_content_headers` colour the response panes for Raw and Headers (with the general key applied first, then the tab-specific override).
+`navigator_*` styles control the unified sidebar tree, and `styles.list_item_*` keys continue to power history/picker list rows. `styles.response_content`, `styles.response_content_raw`, `styles.response_content_headers`, `styles.response_selection`, and `styles.response_cursor` colour the response panes (with the general key applied first, then the tab-specific override for Raw and Headers).
 
 ### Testing a theme
 

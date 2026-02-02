@@ -282,9 +282,7 @@ func (m *Model) consumeHTTPResponse(
 	}
 
 	if resp == nil {
-		m.responseLoading = false
-		m.responseLoadingFrame = 0
-		m.responseRenderToken = ""
+		m.abortResponseFormatting()
 		m.responseLatest = nil
 		m.responsePending = nil
 		target := m.responseTargetPane()
@@ -309,6 +307,8 @@ func (m *Model) consumeHTTPResponse(
 		m.setLivePane(target)
 		return nil
 	}
+
+	m.abortResponseFormatting()
 
 	failureCount := 0
 	for _, result := range tests {
@@ -416,16 +416,76 @@ func (m *Model) consumeHTTPResponse(
 		primaryWidth = defaultResponseViewportWidth
 	}
 
-	cmds := []tea.Cmd{renderHTTPResponseCmd(token, resp, tests, scriptErr, primaryWidth)}
-	if tick := m.scheduleResponseLoadingTick(); tick != nil {
-		cmds = append(cmds, tick)
-	}
-	return tea.Batch(cmds...)
+	formatCtx, cancel := context.WithCancel(context.Background())
+	m.responseRenderCancel = cancel
+
+	return m.respCmd(m.respFmtCmd(formatCtx, token, resp, tests, scriptErr, primaryWidth))
 }
 
 func (m *Model) responseLoadingMessage() string {
-	dots := (m.responseLoadingFrame % 3) + 1
-	return responseFormattingBase + strings.Repeat(".", dots)
+	spin := m.tabSpinner()
+	if spin == "" {
+		return responseFormattingBase
+	}
+	return responseFormattingBase + " " + spin
+}
+
+func (m *Model) responseReflowMessage() string {
+	spin := m.tabSpinner()
+	if spin == "" {
+		return responseReflowingMessage
+	}
+	return responseReflowingMessage + " " + spin
+}
+
+func (m *Model) abortResponseFormatting() {
+	if m.responseRenderCancel != nil {
+		m.responseRenderCancel()
+		m.responseRenderCancel = nil
+	}
+	if m.responseRenderToken != "" && m.responseTokens != nil {
+		delete(m.responseTokens, m.responseRenderToken)
+	}
+	m.responseRenderToken = ""
+	m.responseLoading = false
+	m.responseLoadingFrame = 0
+	m.respSpinStop()
+}
+
+func (m *Model) cancelResponseFormatting(reason string) tea.Cmd {
+	pending := m.responsePending
+	previous := m.responsePrevious
+	m.abortResponseFormatting()
+	m.responsePending = nil
+
+	if pending != nil && !pending.ready {
+		switch {
+		case previous != nil && previous.ready:
+			for _, id := range m.visiblePaneIDs() {
+				pane := m.pane(id)
+				if pane == nil || pane.snapshot != pending {
+					continue
+				}
+				pane.snapshot = previous
+				pane.invalidateCaches()
+			}
+			m.responseLatest = previous
+		default:
+			canceled := responseFormattingCanceledText
+			pending.pretty = canceled
+			pending.raw = canceled
+			pending.rawSummary = canceled
+			pending.headers = canceled
+			pending.requestHeaders = canceled
+			pending.ready = true
+			m.responseLatest = pending
+		}
+	}
+
+	if strings.TrimSpace(reason) != "" {
+		m.setStatusMessage(statusMsg{text: reason, level: statusInfo})
+	}
+	return m.syncResponsePanes()
 }
 
 func (m *Model) scheduleResponseLoadingTick() tea.Cmd {
@@ -478,7 +538,9 @@ func (m *Model) handleResponseRendered(msg responseRenderedMsg) tea.Cmd {
 	m.responseRenderToken = ""
 	m.responseLoading = false
 	m.responseLoadingFrame = 0
+	m.responseRenderCancel = nil
 	m.responseLatest = snapshot
+	m.respSpinStop()
 
 	for _, id := range m.visiblePaneIDs() {
 		pane := m.pane(id)
@@ -486,33 +548,49 @@ func (m *Model) handleResponseRendered(msg responseRenderedMsg) tea.Cmd {
 			continue
 		}
 		pane.invalidateCaches()
+		if pane.sel.on {
+			pane.sel.clear()
+		}
+		if pane.cursor.on {
+			pane.cursor.clear()
+		}
+		if pane.cursorStore != nil {
+			pane.cursorStore = make(map[respCursorKey]respCursor)
+		}
 		if msg.width > 0 && pane.viewport.Width == msg.width {
-			pane.wrapCache[responseTabPretty] = cachedWrap{
-				width:   msg.width,
-				content: msg.prettyWrapped,
-				base:    ensureTrailingNewline(msg.pretty),
-				valid:   true,
+			prettyWidth := responseWrapWidth(responseTabPretty, msg.width)
+			prettyBase := displayContent(msg.pretty)
+			if shouldInlineWrap(responseTabPretty, prettyBase) {
+				pane.setCacheForTab(
+					responseTabPretty,
+					rawViewText,
+					pane.headersView,
+					wrapCache(responseTabPretty, prettyBase, prettyWidth),
+				)
 			}
-			rawWrapped := wrapContentForTab(responseTabRaw, snapshot.raw, msg.width)
-			pane.ensureRawWrapCache()
-			pane.rawWrapCache[snapshot.rawMode] = cachedWrap{
-				width:   msg.width,
-				content: rawWrapped,
-				base:    ensureTrailingNewline(snapshot.raw),
-				valid:   true,
+			rawWidth := responseWrapWidth(responseTabRaw, msg.width)
+			rawBase := displayContent(snapshot.raw)
+			if shouldInlineWrap(responseTabRaw, rawBase) {
+				pane.setCacheForTab(
+					responseTabRaw,
+					snapshot.rawMode,
+					pane.headersView,
+					wrapCache(responseTabRaw, rawBase, rawWidth),
+				)
 			}
 
-			headersBase := ensureTrailingNewline(msg.headers)
-			headersContent := msg.headersWrapped
+			headersWidth := responseWrapWidth(responseTabHeaders, msg.width)
+			headersBase := displayContent(msg.headers)
 			if pane.headersView == headersViewRequest {
-				headersBase = ensureTrailingNewline(msg.requestHeaders)
-				headersContent = msg.requestHeadersWrapped
+				headersBase = displayContent(msg.requestHeaders)
 			}
-			pane.wrapCache[responseTabHeaders] = cachedWrap{
-				width:   msg.width,
-				content: headersContent,
-				base:    headersBase,
-				valid:   true,
+			if shouldInlineWrap(responseTabHeaders, headersBase) {
+				pane.setCacheForTab(
+					responseTabHeaders,
+					rawViewText,
+					pane.headersView,
+					wrapCache(responseTabHeaders, headersBase, headersWidth),
+				)
 			}
 		}
 		if strings.TrimSpace(snapshot.stats) != "" {
@@ -1282,9 +1360,9 @@ func buildHistoryCompareSnapshot(
 	headers := formatHistoryCompareHeaders(env, res)
 	return &responseSnapshot{
 		id:            nextResponseRenderToken(),
-		pretty:        ensureTrailingNewline(summary),
-		raw:           ensureTrailingNewline(summary),
-		headers:       ensureTrailingNewline(headers),
+		pretty:        summary,
+		raw:           summary,
+		headers:       headers,
 		ready:         true,
 		environment:   env,
 		compareBundle: bundle,
@@ -1791,29 +1869,32 @@ func (m *Model) applyPreview(preview string, statusText string) tea.Cmd {
 		if displayWidth <= 0 {
 			displayWidth = defaultResponseViewportWidth
 		}
-		wrapped := wrapToWidth(preview, displayWidth)
-		pane.wrapCache[responseTabPretty] = cachedWrap{
-			width:   displayWidth,
-			content: wrapped,
-			base:    ensureTrailingNewline(snapshot.pretty),
-			valid:   true,
-		}
-		pane.ensureRawWrapCache()
-		pane.rawWrapCache[snapshot.rawMode] = cachedWrap{
-			width:   displayWidth,
-			content: wrapped,
-			base:    ensureTrailingNewline(snapshot.raw),
-			valid:   true,
-		}
-		pane.wrapCache[responseTabHeaders] = cachedWrap{
-			width:   displayWidth,
-			content: wrapped,
-			base:    ensureTrailingNewline(snapshot.headers),
-			valid:   true,
-		}
+		content := displayContent(preview)
+		prettyCache := wrapCache(
+			responseTabPretty,
+			content,
+			responseWrapWidth(responseTabPretty, displayWidth),
+		)
+		pane.setCacheForTab(responseTabPretty, rawViewText, pane.headersView, prettyCache)
+		pane.setCacheForTab(
+			responseTabRaw,
+			snapshot.rawMode,
+			pane.headersView,
+			wrapCache(responseTabRaw, content, responseWrapWidth(responseTabRaw, displayWidth)),
+		)
+		pane.setCacheForTab(
+			responseTabHeaders,
+			rawViewText,
+			pane.headersView,
+			wrapCache(
+				responseTabHeaders,
+				content,
+				responseWrapWidth(responseTabHeaders, displayWidth),
+			),
+		)
 		pane.wrapCache[responseTabDiff] = cachedWrap{}
 		pane.wrapCache[responseTabStats] = cachedWrap{}
-		pane.viewport.SetContent(wrapped)
+		pane.viewport.SetContent(prettyCache.content)
 	}
 
 	m.testResults = nil
@@ -2216,7 +2297,7 @@ func (m *Model) applyHistorySnapshot(snap *responseSnapshot) {
 		if pane.activeTab == responseTabHistory {
 			continue
 		}
-		pane.viewport.SetContent(ensureTrailingNewline(snap.pretty))
+		pane.viewport.SetContent(displayContent(snap.pretty))
 		pane.viewport.GotoTop()
 		pane.setCurrPosition()
 	}

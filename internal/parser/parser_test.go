@@ -68,6 +68,49 @@ GET https://example.com/api
 	}
 }
 
+func TestParseMethodLineWithHTTPVersion(t *testing.T) {
+	src := `###
+
+GET http://127.0.0.1:5001/games HTTP/1.1
+
+###
+
+GET http://127.0.0.1:5001/games/1 HTTP/1.1
+`
+
+	doc := Parse("version.http", []byte(src))
+	if len(doc.Requests) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(doc.Requests))
+	}
+
+	if doc.Requests[0].URL != "http://127.0.0.1:5001/games" {
+		t.Fatalf("unexpected first url: %q", doc.Requests[0].URL)
+	}
+	if doc.Requests[1].URL != "http://127.0.0.1:5001/games/1" {
+		t.Fatalf("unexpected second url: %q", doc.Requests[1].URL)
+	}
+	if doc.Requests[0].Settings["http-version"] != "1.1" {
+		t.Fatalf("expected http-version=1.1, got %q", doc.Requests[0].Settings["http-version"])
+	}
+	if doc.Requests[1].Settings["http-version"] != "1.1" {
+		t.Fatalf("expected http-version=1.1, got %q", doc.Requests[1].Settings["http-version"])
+	}
+}
+
+func TestHTTPVersionSettingOverridesRequestLine(t *testing.T) {
+	src := `GET https://example.com HTTP/1.1
+# @setting http-version 2
+`
+
+	doc := Parse("override.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	if doc.Requests[0].Settings["http-version"] != "2" {
+		t.Fatalf("expected http-version=2, got %q", doc.Requests[0].Settings["http-version"])
+	}
+}
+
 func TestParseAssertDirective(t *testing.T) {
 	src := `# @assert status == 200
 # @assert contains(header("Content-Type"), "json") => "content type"
@@ -954,7 +997,7 @@ func TestParseWorkflowDirectives(t *testing.T) {
 	src := `# @workflow provision-account on-failure=continue
 # @description Provision new account flow
 # @tag smoke regression
-# @step Authenticate using=AuthLogin expect.status="200 OK"
+# @step Authenticate using=AuthLogin expect.status="200 OK" expect.statusCode=200
 # @step CreateProfile using=CreateUser on-failure=stop vars.request.name={{vars.global.username}} expect.status="201 Created"
 # @step Audit using=AuditLog capture=global.auditId
 
@@ -996,6 +1039,9 @@ GET https://example.com/audit
 	if step0.Expect["status"] != "200 OK" {
 		t.Fatalf("expected first step expect.status=200 OK, got %q", step0.Expect["status"])
 	}
+	if step0.Expect["statuscode"] != "200" {
+		t.Fatalf("expected first step expect.statuscode=200, got %q", step0.Expect["statuscode"])
+	}
 	step1 := workflow.Steps[1]
 	if step1.OnFailure != restfile.WorkflowOnFailureStop {
 		t.Fatalf("expected second step on-failure=stop, got %s", step1.OnFailure)
@@ -1019,6 +1065,101 @@ GET https://example.com/audit
 	}
 	if len(doc.Requests) != 3 {
 		t.Fatalf("expected 3 requests parsed, got %d", len(doc.Requests))
+	}
+}
+
+func TestParseWorkflowExpectErrors(t *testing.T) {
+	src := `# @workflow demo
+# @step EmptyStatus using=Req expect.status=""
+# @step EmptyCode using=Req expect.statuscode=
+# @step BadCode using=Req expect.statuscode=abc
+# @step Mixed using=Req expect.status="200 OK" expect.statuscode=200
+
+### Req
+GET https://example.com
+`
+	doc := Parse("workflow-errors.http", []byte(src))
+	if len(doc.Errors) != 3 {
+		t.Fatalf("expected 3 parse errors, got %v", doc.Errors)
+	}
+	for _, want := range []string{
+		"expect.status requires a value",
+		"expect.statuscode requires a value",
+		"expect.statuscode must be an integer",
+	} {
+		found := false
+		for _, err := range doc.Errors {
+			if strings.Contains(err.Message, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected parse error containing %q, got %v", want, doc.Errors)
+		}
+	}
+	if len(doc.Workflows) != 1 {
+		t.Fatalf("expected 1 workflow, got %d", len(doc.Workflows))
+	}
+	workflow := doc.Workflows[0]
+	if len(workflow.Steps) != 4 {
+		t.Fatalf("expected 4 steps, got %d", len(workflow.Steps))
+	}
+	for i := 0; i < 3; i++ {
+		if len(workflow.Steps[i].Expect) != 0 {
+			t.Fatalf(
+				"expected step %d to have no expectations, got %v",
+				i+1,
+				workflow.Steps[i].Expect,
+			)
+		}
+	}
+	mixed := workflow.Steps[3]
+	if mixed.Expect["status"] != "200 OK" {
+		t.Fatalf("expected mixed step expect.status=200 OK, got %q", mixed.Expect["status"])
+	}
+	if mixed.Expect["statuscode"] != "200" {
+		t.Fatalf("expected mixed step expect.statuscode=200, got %q", mixed.Expect["statuscode"])
+	}
+}
+
+func TestParseWorkflowWhenForEach(t *testing.T) {
+	src := `# @workflow demo
+# @skip-if vars.user.disabled
+# @step Guard using=CheckUser
+# @for-each item in vars.items
+# @step Each using=ProcessItem
+
+### CheckUser
+GET https://example.com/user
+
+### ProcessItem
+POST https://example.com/items
+`
+	doc := Parse("workflow-when-each.http", []byte(src))
+	if len(doc.Workflows) != 1 {
+		t.Fatalf("expected 1 workflow, got %d", len(doc.Workflows))
+	}
+	wf := doc.Workflows[0]
+	if len(wf.Steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(wf.Steps))
+	}
+	st0 := wf.Steps[0]
+	if st0.When == nil {
+		t.Fatalf("expected first step to have @skip-if condition")
+	}
+	if !st0.When.Negate || st0.When.Expression != "vars.user.disabled" {
+		t.Fatalf("unexpected condition: %+v", st0.When)
+	}
+	st1 := wf.Steps[1]
+	if st1.Kind != restfile.WorkflowStepKindForEach {
+		t.Fatalf("expected second step kind for-each, got %s", st1.Kind)
+	}
+	if st1.ForEach == nil {
+		t.Fatalf("expected second step for-each spec")
+	}
+	if st1.ForEach.Var != "item" || st1.ForEach.Expr != "vars.items" {
+		t.Fatalf("unexpected for-each spec: %+v", st1.ForEach)
 	}
 }
 
@@ -1393,5 +1534,25 @@ GET https://example.com/api
 	}
 	if spec.Enabled {
 		t.Fatalf("expected trace disabled")
+	}
+}
+
+func TestParseUseDirectiveNoAlias(t *testing.T) {
+	src := `# @use ./rts/helpers.rts
+GET https://example.com
+`
+	d := Parse("use.http", []byte(src))
+	if len(d.Errors) != 0 {
+		t.Fatalf("expected no parse errors, got %v", d.Errors)
+	}
+	if len(d.Uses) != 1 {
+		t.Fatalf("expected 1 use, got %d", len(d.Uses))
+	}
+	sp := d.Uses[0]
+	if sp.Path != "./rts/helpers.rts" {
+		t.Fatalf("unexpected use path: %q", sp.Path)
+	}
+	if sp.Alias != "" {
+		t.Fatalf("expected empty alias, got %q", sp.Alias)
 	}
 }

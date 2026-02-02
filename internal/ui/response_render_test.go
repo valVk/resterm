@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -23,7 +24,8 @@ func TestRenderHTTPResponseCmdRawWrappedPreservesRawBody(t *testing.T) {
 		EffectiveURL: "https://example.com/items",
 	}
 
-	cmd := renderHTTPResponseCmd("token", resp, nil, nil, 12)
+	model := New(Config{})
+	cmd := model.respFmtCmd(context.Background(), "token", resp, nil, nil, 12)
 	if cmd == nil {
 		t.Fatalf("expected command")
 	}
@@ -34,16 +36,8 @@ func TestRenderHTTPResponseCmdRawWrappedPreservesRawBody(t *testing.T) {
 		t.Fatalf("unexpected message type %T", msgVal)
 	}
 
-	rawView := buildHTTPResponseViews(resp, nil, nil).raw
-	expectedWrapped := wrapContentForTab(responseTabRaw, rawView, 12)
-	if msg.rawWrapped != expectedWrapped {
-		t.Fatalf(
-			"expected rawWrapped to match formatted raw view, got %q want %q",
-			msg.rawWrapped,
-			expectedWrapped,
-		)
-	}
-	lines := strings.Split(msg.rawWrapped, "\n")
+	wrapped := wrapContentForTab(responseTabRaw, msg.raw, 12)
+	lines := strings.Split(wrapped, "\n")
 	var (
 		indent      string
 		indentIndex = -1

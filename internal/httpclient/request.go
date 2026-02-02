@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/unkn0wn-root/resterm/internal/errdef"
+	"github.com/unkn0wn-root/resterm/internal/httpver"
 	"github.com/unkn0wn-root/resterm/internal/restfile"
 	"github.com/unkn0wn-root/resterm/internal/vars"
 )
@@ -22,52 +23,21 @@ func (c *Client) prepareHTTPRequest(
 		return nil, opts, errdef.New(errdef.CodeHTTP, "request is nil")
 	}
 
-	bodyReader, err := c.prepareBody(req, resolver, opts)
+	effective := applyRequestSettings(opts, req.Settings)
+	return c.prepareHTTPRequestWithOpts(ctx, req, resolver, effective)
+}
+
+func (c *Client) prepareHTTPRequestWithOpts(
+	ctx context.Context,
+	req *restfile.Request,
+	resolver *vars.Resolver,
+	opts Options,
+) (*http.Request, Options, error) {
+	plan, err := c.prepareBody(req, resolver, opts)
 	if err != nil {
 		return nil, opts, err
 	}
-
-	expandedURL := strings.TrimSpace(req.URL)
-	if expandedURL == "" {
-		return nil, opts, errdef.New(errdef.CodeHTTP, "request url is empty")
-	}
-	if req.Body.GraphQL == nil || !strings.EqualFold(req.Method, "GET") {
-		if resolver != nil {
-			expandedURL, err = resolver.ExpandTemplates(expandedURL)
-			if err != nil {
-				return nil, opts, errdef.Wrap(errdef.CodeHTTP, err, "expand url")
-			}
-		}
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, req.Method, expandedURL, bodyReader)
-	if err != nil {
-		return nil, opts, errdef.Wrap(errdef.CodeHTTP, err, "build request")
-	}
-
-	if req.Headers != nil {
-		for name, values := range req.Headers {
-			for _, value := range values {
-				finalValue := value
-				if resolver != nil {
-					if expanded, expandErr := resolver.ExpandTemplates(value); expandErr == nil {
-						finalValue = expanded
-					}
-				}
-				httpReq.Header.Add(name, finalValue)
-			}
-		}
-	}
-
-	if req.Body.GraphQL != nil && !strings.EqualFold(req.Method, "GET") {
-		if httpReq.Header.Get("Content-Type") == "" {
-			httpReq.Header.Set("Content-Type", "application/json")
-		}
-	}
-
-	c.applyAuthentication(httpReq, resolver, req.Metadata.Auth)
-	effectiveOpts := applyRequestSettings(opts, req.Settings)
-	return httpReq, effectiveOpts, nil
+	return c.buildHTTPRequest(ctx, req, resolver, opts, plan.rd, plan.url)
 }
 
 func (c *Client) applyAuthentication(
@@ -176,15 +146,12 @@ func captureReqMeta(sent *http.Request, resp *http.Response) reqMeta {
 }
 
 func applyRequestSettings(opts Options, settings map[string]string) Options {
-	if len(settings) == 0 {
+	norm := normalizeSettings(settings)
+	if len(norm) == 0 {
 		return opts
 	}
 
 	effective := opts
-	norm := make(map[string]string, len(settings))
-	for k, v := range settings {
-		norm[strings.ToLower(k)] = v
-	}
 
 	if value, ok := norm["timeout"]; ok {
 		if dur, err := time.ParseDuration(value); err == nil {
@@ -207,6 +174,42 @@ func applyRequestSettings(opts Options, settings map[string]string) Options {
 			effective.InsecureSkipVerify = b
 		}
 	}
+	if v := resolveHTTPVersion(opts, norm); v != httpver.Unknown {
+		effective.HTTPVersion = v
+	}
 
 	return effective
+}
+
+func normalizeSettings(settings map[string]string) map[string]string {
+	if len(settings) == 0 {
+		return nil
+	}
+	norm := make(map[string]string, len(settings))
+	for k, v := range settings {
+		key := strings.ToLower(strings.TrimSpace(k))
+		if key == "" {
+			continue
+		}
+		norm[key] = v
+	}
+	return norm
+}
+
+func applyHTTPVersion(req *http.Request, v httpver.Version) {
+	if req == nil {
+		return
+	}
+	switch v {
+	case httpver.V10:
+		req.Proto = "HTTP/1.0"
+		req.ProtoMajor = 1
+		req.ProtoMinor = 0
+	case httpver.V11:
+		req.Proto = "HTTP/1.1"
+		req.ProtoMajor = 1
+		req.ProtoMinor = 1
+	case httpver.V2:
+		// HTTP/2 is negotiated by the transport; net/http ignores req.Proto for h2.
+	}
 }

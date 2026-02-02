@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	udiff "github.com/aymanbagabas/go-udiff"
@@ -64,18 +66,23 @@ const (
 )
 
 type responsePaneState struct {
-	viewport       viewport.Model
-	activeTab      responseTab
-	lastContentTab responseTab
-	followLatest   bool
-	snapshot       *responseSnapshot
-	wrapCache      map[responseTab]cachedWrap
-	rawWrapCache   map[rawViewMode]cachedWrap
-	search         responseSearchState
-	tabScroll      map[responseTab]int
-	headersView    headersViewMode
-	headerScroll   map[headersViewMode]int
-	reflow         responseReflowState
+	viewport         viewport.Model
+	activeTab        responseTab
+	lastContentTab   responseTab
+	followLatest     bool
+	snapshot         *responseSnapshot
+	wrapCache        map[responseTab]cachedWrap
+	rawWrapCache     map[rawViewMode]cachedWrap
+	headersWrapCache map[headersViewMode]cachedWrap
+	search           responseSearchState
+	tabScroll        map[responseTab]int
+	headersView      headersViewMode
+	headerScroll     map[headersViewMode]int
+	reflow           map[responseReflowKey]responseReflowState
+	reflowCanceled   map[responseReflowKey]responseReflowCancelState
+	sel              respSel
+	cursor           respCursor
+	cursorStore      map[respCursorKey]respCursor
 }
 
 type responseReflowState struct {
@@ -85,21 +92,56 @@ type responseReflowState struct {
 	mode       rawViewMode
 	headers    headersViewMode
 	snapshotID string
+	cancel     context.CancelFunc
 }
 
 func newResponsePaneState(vp viewport.Model, followLatest bool) responsePaneState {
 	return responsePaneState{
-		viewport:       vp,
-		activeTab:      responseTabPretty,
-		lastContentTab: responseTabPretty,
-		followLatest:   followLatest,
-		wrapCache:      make(map[responseTab]cachedWrap),
-		rawWrapCache:   make(map[rawViewMode]cachedWrap),
-		search:         responseSearchState{index: -1},
-		tabScroll:      make(map[responseTab]int),
-		headersView:    headersViewResponse,
-		headerScroll:   make(map[headersViewMode]int),
+		viewport:         vp,
+		activeTab:        responseTabPretty,
+		lastContentTab:   responseTabPretty,
+		followLatest:     followLatest,
+		wrapCache:        make(map[responseTab]cachedWrap),
+		rawWrapCache:     make(map[rawViewMode]cachedWrap),
+		headersWrapCache: make(map[headersViewMode]cachedWrap),
+		search:           responseSearchState{index: -1},
+		tabScroll:        make(map[responseTab]int),
+		headersView:      headersViewResponse,
+		headerScroll:     make(map[headersViewMode]int),
+		reflow:           make(map[responseReflowKey]responseReflowState),
+		reflowCanceled:   make(map[responseReflowKey]responseReflowCancelState),
+		cursorStore:      make(map[respCursorKey]respCursor),
 	}
+}
+
+func (pane *responsePaneState) stashCursor() {
+	if pane == nil || !pane.cursor.on {
+		return
+	}
+	if pane.cursorStore == nil {
+		pane.cursorStore = make(map[respCursorKey]respCursor)
+	}
+	pane.cursorStore[pane.cursor.key()] = pane.cursor
+}
+
+func (pane *responsePaneState) restoreCursor(tab responseTab) {
+	if pane == nil || pane.cursorStore == nil {
+		if pane != nil {
+			pane.cursor.clear()
+		}
+		return
+	}
+	mode := rawViewMode(0)
+	if pane.snapshot != nil {
+		mode = pane.snapshot.rawMode
+	}
+	key := respCursorKeyFor(tab, pane.headersView, mode)
+	stored, ok := pane.cursorStore[key]
+	if !ok || !cursorMatchesSnapshot(stored, pane.snapshot) {
+		pane.cursor.clear()
+		return
+	}
+	pane.cursor = stored
 }
 
 func (pane *responsePaneState) invalidateCaches() {
@@ -110,6 +152,18 @@ func (pane *responsePaneState) invalidateCaches() {
 		for k := range pane.rawWrapCache {
 			pane.rawWrapCache[k] = cachedWrap{}
 		}
+	}
+	if pane.headersWrapCache != nil {
+		for k := range pane.headersWrapCache {
+			pane.headersWrapCache[k] = cachedWrap{}
+		}
+	}
+	clearReflowAll(pane)
+	if pane.reflow != nil {
+		pane.reflow = make(map[responseReflowKey]responseReflowState)
+	}
+	if pane.reflowCanceled != nil {
+		pane.reflowCanceled = make(map[responseReflowKey]responseReflowCancelState)
 	}
 	pane.search.invalidate()
 	if pane.tabScroll != nil {
@@ -123,6 +177,56 @@ func (pane *responsePaneState) invalidateCaches() {
 func (pane *responsePaneState) ensureRawWrapCache() {
 	if pane.rawWrapCache == nil {
 		pane.rawWrapCache = make(map[rawViewMode]cachedWrap)
+	}
+}
+
+func (pane *responsePaneState) ensureHeadersWrapCache() {
+	if pane.headersWrapCache == nil {
+		pane.headersWrapCache = make(map[headersViewMode]cachedWrap)
+	}
+}
+
+func (pane *responsePaneState) cacheForTab(
+	tab responseTab,
+	mode rawViewMode,
+	headers headersViewMode,
+) cachedWrap {
+	if pane == nil {
+		return cachedWrap{}
+	}
+	switch tab {
+	case responseTabRaw:
+		pane.ensureRawWrapCache()
+		return pane.rawWrapCache[mode]
+	case responseTabHeaders:
+		pane.ensureHeadersWrapCache()
+		return pane.headersWrapCache[headers]
+	default:
+		return pane.wrapCache[tab]
+	}
+}
+
+func (pane *responsePaneState) setCacheForTab(
+	tab responseTab,
+	mode rawViewMode,
+	headers headersViewMode,
+	cache cachedWrap,
+) {
+	if pane == nil {
+		return
+	}
+	switch tab {
+	case responseTabRaw:
+		pane.ensureRawWrapCache()
+		pane.rawWrapCache[mode] = cache
+	case responseTabHeaders:
+		pane.ensureHeadersWrapCache()
+		pane.headersWrapCache[headers] = cache
+	default:
+		if pane.wrapCache == nil {
+			pane.wrapCache = make(map[responseTab]cachedWrap)
+		}
+		pane.wrapCache[tab] = cache
 	}
 }
 
@@ -154,6 +258,11 @@ func (pane *responsePaneState) invalidateRawCache(mode rawViewMode) {
 func (pane *responsePaneState) setActiveTab(tab responseTab) {
 	if pane.activeTab != tab {
 		pane.setCurrPosition()
+		if pane.sel.on {
+			pane.sel.clear()
+		}
+		pane.stashCursor()
+		pane.restoreCursor(tab)
 	}
 	pane.activeTab = tab
 	if tab == responseTabPretty || tab == responseTabRaw || tab == responseTabHeaders ||
@@ -170,10 +279,18 @@ func (pane *responsePaneState) setHeadersView(mode headersViewMode) {
 	if pane.headersView == mode {
 		return
 	}
-	pane.headersView = mode
-	if pane.wrapCache != nil {
-		pane.wrapCache[responseTabHeaders] = cachedWrap{}
+	if pane.activeTab == responseTabHeaders {
+		pane.stashCursor()
 	}
+	pane.headersView = mode
+	if pane.sel.on {
+		pane.sel.clear()
+	}
+	if pane.activeTab == responseTabHeaders {
+		pane.restoreCursor(responseTabHeaders)
+	}
+	pane.ensureHeadersWrapCache()
+	pane.headersWrapCache[mode] = cachedWrap{}
 	pane.search.invalidate()
 }
 
@@ -291,6 +408,85 @@ func (m *Model) syncResponsePanes() tea.Cmd {
 	}
 }
 
+func (m *Model) queueReflow(
+	p *responsePaneState,
+	req responseReflowReq,
+	d time.Duration,
+	w int,
+	h int,
+	ready bool,
+	sid string,
+) tea.Cmd {
+	cmd := m.scheduleResponseReflow(p, req, d)
+	if cmd == nil {
+		return nil
+	}
+	msg := m.responseReflowMessage()
+	if msg != "" {
+		content := centerContent(msg, w, h)
+		m.applyPaneContent(p, req.tab, content, w, ready, sid)
+	}
+	return cmd
+}
+
+func paneDims(p *responsePaneState, tab responseTab) (int, int, int) {
+	if p == nil {
+		return 0, 0, 0
+	}
+	w := p.viewport.Width
+	if w <= 0 {
+		w = defaultResponseViewportWidth
+	}
+	ww := responseWrapWidth(tab, w)
+	h := p.viewport.Height
+	return w, ww, h
+}
+
+func paneSnap(p *responsePaneState) (bool, string) {
+	if p == nil || p.snapshot == nil {
+		return false, ""
+	}
+	return p.snapshot.ready, p.snapshot.id
+}
+
+func (m *Model) applyReflowCanceled(
+	pane *responsePaneState,
+	tab responseTab,
+	width int,
+	height int,
+	snapshotReady bool,
+	snapshotID string,
+) {
+	if pane == nil {
+		return
+	}
+	if responseReflowCanceledText == "" {
+		return
+	}
+	content := centerContent(responseReflowCanceledText, width, height)
+	m.applyPaneContent(pane, tab, content, width, snapshotReady, snapshotID)
+}
+
+type rflCancelCtx struct {
+	tab       responseTab
+	mode      rawViewMode
+	width     int
+	height    int
+	snapReady bool
+	snapID    string
+}
+
+func (m *Model) applyRflCancel(p *responsePaneState, c rflCancelCtx) bool {
+	if p == nil {
+		return false
+	}
+	if !reflowCanceled(p, reflowKey(c.tab, c.mode, p.headersView), c.snapID) {
+		return false
+	}
+	m.applyReflowCanceled(p, c.tab, c.width, c.height, c.snapReady, c.snapID)
+	return true
+}
+
 func (m *Model) applyPaneContent(
 	pane *responsePaneState,
 	tab responseTab,
@@ -311,6 +507,8 @@ func (m *Model) applyPaneContent(
 		snapshotID,
 	)
 	decorated = m.applyResponseContentStyles(tab, decorated)
+	decorated = m.decorateResponseSelection(pane, tab, decorated)
+	decorated = m.decorateResponseCursor(pane, tab, decorated)
 	pane.viewport.SetContent(decorated)
 	pane.restoreScrollForActiveTab()
 	ensureResponseMatchInView(pane, content)
@@ -393,38 +591,31 @@ func (m *Model) syncResponsePane(id responsePaneID) tea.Cmd {
 		return nil
 	}
 
-	width := pane.viewport.Width
-	if width <= 0 {
-		width = defaultResponseViewportWidth
-	}
-	height := pane.viewport.Height
+	w, ww, h := paneDims(pane, tab)
 
 	if tab == responseTabStats {
 		snapshot := pane.snapshot
 		if snapshot != nil && snapshot.statsKind == statsReportKindWorkflow &&
 			snapshot.workflowStats != nil {
-			return m.syncWorkflowStatsPane(pane, width, snapshot)
+			return m.syncWorkflowStatsPane(pane, w, snapshot)
 		}
 	}
 
-	snapshotID := ""
-	snapshotReady := false
-	if pane.snapshot != nil {
-		snapshotReady = pane.snapshot.ready
-		snapshotID = pane.snapshot.id
-	}
+	sr, sid := paneSnap(pane)
 
-	content, cacheKey := m.paneContentForTab(id, tab)
+	content, cacheKey := m.paneContentForTabDisplay(id, tab)
 	if content == "" {
-		centered := centerContent(noResponseMessage, width, height)
-		wrapped := wrapToWidth(centered, width)
-		pane.wrapCache[cacheKey] = cachedWrap{
-			width:   width,
-			content: wrapped,
-			base:    centered,
-			valid:   true,
-		}
-		m.applyPaneContent(pane, cacheKey, wrapped, width, snapshotReady, snapshotID)
+		centered := centerContent(noResponseMessage, ww, h)
+		cache := wrapCache(cacheKey, centered, ww)
+		pane.setCacheForTab(cacheKey, rawViewText, pane.headersView, cache)
+		m.applyPaneContent(
+			pane,
+			cacheKey,
+			cache.content,
+			ww,
+			sr,
+			sid,
+		)
 		return nil
 	}
 
@@ -433,63 +624,119 @@ func (m *Model) syncResponsePane(id responsePaneID) tea.Cmd {
 		mode := snap.rawMode
 
 		if snap.rawLoading && (mode == rawViewHex || mode == rawViewBase64) {
-			reflowing := centerContent(responseReflowingMessage, width, height)
-			m.applyPaneContent(pane, cacheKey, reflowing, width, snapshotReady, snapshotID)
+			reflowing := centerContent(m.responseReflowMessage(), ww, h)
+			m.applyPaneContent(pane, cacheKey, reflowing, ww, sr, sid)
 			return nil
 		}
 
-		pane.ensureRawWrapCache()
-		cache := pane.rawWrapCache[mode]
-		if cache.valid && cache.width == width {
-			m.applyPaneContent(pane, cacheKey, cache.content, width, snapshotReady, snapshotID)
+		if m.applyRflCancel(pane, rflCancelCtx{
+			tab:       cacheKey,
+			mode:      mode,
+			width:     ww,
+			height:    h,
+			snapReady: sr,
+			snapID:    sid,
+		}) {
 			return nil
 		}
 
-		if shouldReflow(cacheKey, mode, pane.snapshot) {
+		cache := pane.cacheForTab(cacheKey, mode, pane.headersView)
+		if cache.valid && cache.width == ww {
+			m.applyPaneContent(pane, cacheKey, cache.content, ww, sr, sid)
+			return nil
+		}
+
+		if shouldReflow(cacheKey, mode, pane.snapshot) || shouldAsyncWrap(cacheKey, content) {
 			req := responseReflowReq{
 				paneID:     id,
 				tab:        cacheKey,
-				width:      width,
+				width:      ww,
 				content:    content,
-				snapshotID: snapshotID,
+				snapshotID: sid,
 				mode:       mode,
 				headers:    pane.headersView,
 			}
 
-			delay := reflowDelay(pane, cacheKey, width, mode)
-			if cmd := m.scheduleResponseReflow(pane, req, delay); cmd != nil {
-				reflowing := centerContent(responseReflowingMessage, width, height)
-				m.applyPaneContent(pane, cacheKey, reflowing, width, false, snapshotID)
+			delay := reflowDelay(pane, cacheKey, ww, mode)
+			if cmd := m.queueReflow(
+				pane,
+				req,
+				delay,
+				ww,
+				h,
+				false,
+				sid,
+			); cmd != nil {
 				return cmd
 			}
 			return nil
 		}
 
-		wrapped := wrapContentForTab(cacheKey, content, width)
-		pane.rawWrapCache[mode] = cachedWrap{
-			width:   width,
-			content: wrapped,
-			base:    content,
-			valid:   true,
+		cache = wrapCache(cacheKey, content, ww)
+		pane.setCacheForTab(cacheKey, mode, pane.headersView, cache)
+		m.applyPaneContent(
+			pane,
+			cacheKey,
+			cache.content,
+			ww,
+			sr,
+			sid,
+		)
+		return nil
+	}
+
+	mode := rawViewText
+	if m.applyRflCancel(pane, rflCancelCtx{
+		tab:       cacheKey,
+		mode:      mode,
+		width:     ww,
+		height:    h,
+		snapReady: sr,
+		snapID:    sid,
+	}) {
+		return nil
+	}
+	cache := pane.cacheForTab(cacheKey, mode, pane.headersView)
+	if cache.valid && cache.width == ww {
+		m.applyPaneContent(pane, cacheKey, cache.content, ww, sr, sid)
+		return nil
+	}
+
+	if shouldAsyncWrap(cacheKey, content) {
+		req := responseReflowReq{
+			paneID:     id,
+			tab:        cacheKey,
+			width:      ww,
+			content:    content,
+			snapshotID: sid,
+			mode:       mode,
+			headers:    pane.headersView,
 		}
-		m.applyPaneContent(pane, cacheKey, wrapped, width, snapshotReady, snapshotID)
+		delay := reflowDelay(pane, cacheKey, ww, mode)
+		if cmd := m.queueReflow(
+			pane,
+			req,
+			delay,
+			ww,
+			h,
+			false,
+			sid,
+		); cmd != nil {
+			return cmd
+		}
 		return nil
 	}
 
-	cache := pane.wrapCache[cacheKey]
-	if cache.valid && cache.width == width {
-		m.applyPaneContent(pane, cacheKey, cache.content, width, snapshotReady, snapshotID)
-		return nil
-	}
-
-	wrapped := wrapContentForTab(cacheKey, content, width)
-	pane.wrapCache[cacheKey] = cachedWrap{
-		width:   width,
-		content: wrapped,
-		base:    content,
-		valid:   true,
-	}
-	m.applyPaneContent(pane, cacheKey, wrapped, width, snapshotReady, snapshotID)
+	cache = wrapCache(cacheKey, content, ww)
+	pane.setCacheForTab(cacheKey, mode, pane.headersView, cache)
+	m.applyPaneContent(
+		pane,
+		cacheKey,
+		cache.content,
+		ww,
+		sr,
+		sid,
+	)
 	return nil
 }
 
@@ -502,12 +749,11 @@ func (m *Model) syncWorkflowStatsPane(
 		return nil
 	}
 	render := snapshot.workflowStats.render(width)
-	pane.wrapCache[responseTabStats] = cachedWrap{
+	pane.setCacheForTab(responseTabStats, rawViewText, pane.headersView, cachedWrap{
 		width:   width,
 		content: render.content,
-		base:    render.content,
 		valid:   true,
-	}
+	})
 	decorated := m.decorateResponseContentForPane(
 		pane,
 		responseTabStats,
@@ -573,15 +819,7 @@ func (m *Model) applyResponseContentStyles(tab responseTab, content string) stri
 	if tab == responseTabStream {
 		return m.theme.StreamContent.Render(content)
 	}
-	styled := m.theme.ResponseContent.Render(content)
-	switch tab {
-	case responseTabRaw:
-		return m.theme.ResponseContentRaw.Render(styled)
-	case responseTabHeaders:
-		return m.theme.ResponseContentHeaders.Render(styled)
-	default:
-		return styled
-	}
+	return m.respBaseStyle(tab).Render(content)
 }
 
 func ensureResponseMatchInView(pane *responsePaneState, base string) {
@@ -599,7 +837,10 @@ func ensureResponseMatchInView(pane *responsePaneState, base string) {
 	ensureResponseMatchVisible(&pane.viewport, base, pane.search.matches[idx])
 }
 
-func (m *Model) paneContentForTab(id responsePaneID, tab responseTab) (string, responseTab) {
+func (m *Model) paneContentBaseForTab(
+	id responsePaneID,
+	tab responseTab,
+) (string, responseTab) {
 	pane := m.pane(id)
 	if pane == nil {
 		return "", tab
@@ -609,7 +850,7 @@ func (m *Model) paneContentForTab(id responsePaneID, tab responseTab) (string, r
 		if content == "" {
 			content = "<stream idle>\n"
 		}
-		return ensureTrailingNewline(content), tab
+		return content, tab
 	}
 	snapshot := pane.snapshot
 	if snapshot == nil {
@@ -621,20 +862,20 @@ func (m *Model) paneContentForTab(id responsePaneID, tab responseTab) (string, r
 
 	switch tab {
 	case responseTabPretty:
-		return ensureTrailingNewline(snapshot.pretty), tab
+		return snapshot.pretty, tab
 	case responseTabRaw:
-		return ensureTrailingNewline(snapshot.raw), tab
+		return snapshot.raw, tab
 	case responseTabHeaders:
 		if pane != nil && pane.headersView == headersViewRequest {
 			if strings.TrimSpace(snapshot.requestHeaders) == "" {
 				return "<no request headers>\n", tab
 			}
-			return ensureTrailingNewline(snapshot.requestHeaders), tab
+			return snapshot.requestHeaders, tab
 		}
 		if strings.TrimSpace(snapshot.headers) == "" {
 			return "<no headers>\n", tab
 		}
-		return ensureTrailingNewline(snapshot.headers), tab
+		return snapshot.headers, tab
 	case responseTabStats:
 		if strings.TrimSpace(snapshot.stats) == "" {
 			return "<no stats>\n", tab
@@ -652,7 +893,7 @@ func (m *Model) paneContentForTab(id responsePaneID, tab responseTab) (string, r
 				content = snapshot.statsColored
 			}
 		}
-		return ensureTrailingNewline(content), tab
+		return content, tab
 	case responseTabTimeline:
 		if snapshot.timeline == nil {
 			return "Trace data unavailable.\n", tab
@@ -666,7 +907,7 @@ func (m *Model) paneContentForTab(id responsePaneID, tab responseTab) (string, r
 		)
 		snapshot.traceReport = report
 		content := renderTimeline(report, pane.viewport.Width)
-		return ensureTrailingNewline(content), tab
+		return content, tab
 	case responseTabCompare:
 		bundle := snapshot.compareBundle
 		if bundle == nil {
@@ -676,7 +917,7 @@ func (m *Model) paneContentForTab(id responsePaneID, tab responseTab) (string, r
 			return "Compare data unavailable.\n", tab
 		}
 		content := renderCompareBundle(bundle, m.compareFocusEnv(snapshot))
-		return ensureTrailingNewline(content), tab
+		return content, tab
 	case responseTabDiff:
 		baseTab := pane.ensureContentTab()
 		if diff, ok := m.computeDiffFor(id, baseTab); ok {
@@ -686,6 +927,19 @@ func (m *Model) paneContentForTab(id responsePaneID, tab responseTab) (string, r
 	default:
 		return "", tab
 	}
+}
+
+func (m *Model) paneContentForTab(id responsePaneID, tab responseTab) (string, responseTab) {
+	content, tab := m.paneContentBaseForTab(id, tab)
+	return withTrailingNewline(content), tab
+}
+
+func (m *Model) paneContentForTabDisplay(
+	id responsePaneID,
+	tab responseTab,
+) (string, responseTab) {
+	content, tab := m.paneContentBaseForTab(id, tab)
+	return displayContent(content), tab
 }
 
 func (m *Model) computeDiffFor(id responsePaneID, baseTab responseTab) (string, bool) {
@@ -711,8 +965,8 @@ func (m *Model) computeDiffFor(id responsePaneID, baseTab responseTab) (string, 
 
 	var sections []string
 	appendDiff := func(title, lhs, rhs, lhsLabel, rhsLabel string) {
-		leftContent := ensureTrailingNewline(lhs)
-		rightContent := ensureTrailingNewline(rhs)
+		leftContent := withTrailingNewline(lhs)
+		rightContent := withTrailingNewline(rhs)
 		if leftContent == rightContent {
 			return
 		}
@@ -804,59 +1058,104 @@ func (m *Model) compareFocusEnv(snapshot *responseSnapshot) string {
 	return ""
 }
 
-func ensureTrailingNewline(content string) string {
+func addTrailingNewline(content string) (string, bool) {
 	if content == "" {
-		return "\n"
+		return "\n", true
 	}
 	if strings.HasSuffix(content, "\n") {
-		return content
+		return content, false
 	}
-	return content + "\n"
+	return content + "\n", true
+}
+
+func withTrailingNewline(content string) string {
+	out, _ := addTrailingNewline(content)
+	return out
+}
+
+func displayContent(content string) string {
+	out, syn := addTrailingNewline(content)
+	return trimSyntheticNewline(out, syn)
 }
 
 func wrapDiffContent(content string, width int) string {
-	if width <= 0 {
-		return content
-	}
-	lines := strings.Split(content, "\n")
-	wrapped := make([]string, 0, len(lines))
-	for _, line := range lines {
-		segments := wrapDiffLine(line, width)
-		wrapped = append(wrapped, segments...)
-	}
-	return strings.Join(wrapped, "\n")
+	out, _ := wrapDiffContentCtx(context.Background(), content, width)
+	return out
 }
 
-func wrapDiffLine(line string, width int) []string {
+func wrapDiffContentCtx(ctx context.Context, content string, width int) (string, bool) {
 	if width <= 0 {
-		return []string{line}
+		return content, true
+	}
+	if ctxDone(ctx) {
+		return "", false
+	}
+	var out strings.Builder
+	out.Grow(len(content) + len(content)/8)
+
+	b := []byte(content)
+	ls := 0
+	first := true
+	for i := 0; i <= len(b); i++ {
+		if i != len(b) && b[i] != '\n' {
+			continue
+		}
+		line := string(b[ls:i])
+		ls = i + 1
+		segs, ok := wrapDiffLineCtx(ctx, line, width)
+		if !ok {
+			return "", false
+		}
+		for _, seg := range segs {
+			if !first {
+				out.WriteByte('\n')
+			}
+			first = false
+			out.WriteString(seg)
+		}
+	}
+	return out.String(), true
+}
+
+func wrapDiffLineCtx(ctx context.Context, line string, width int) ([]string, bool) {
+	if ctxDone(ctx) {
+		return nil, false
+	}
+	if width <= 0 {
+		return []string{line}, true
 	}
 	if line == "" {
-		return []string{""}
+		return []string{""}, true
 	}
 	if visibleWidth(line) <= width {
-		return []string{line}
+		return []string{line}, true
 	}
 	marker, markerWidth, remainder, ok := splitDiffMarker(line)
 	if !ok {
-		return wrapLineSegments(line, width)
+		return wrapLineSegmentsCtx(ctx, line, width)
 	}
 	if markerWidth >= width {
-		return wrapLineSegments(line, width)
+		return wrapLineSegmentsCtx(ctx, line, width)
 	}
 	segmentWidth := width - markerWidth
 	if segmentWidth <= 0 {
-		return wrapLineSegments(line, width)
+		return wrapLineSegmentsCtx(ctx, line, width)
 	}
-	segments := wrapLineSegments(remainder, segmentWidth)
+	segments, ok := wrapLineSegmentsCtx(ctx, remainder, segmentWidth)
+	if !ok {
+		return nil, false
+	}
 	if len(segments) == 0 {
-		return []string{marker}
+		return []string{marker}, true
 	}
 	result := make([]string, len(segments))
 	for i, seg := range segments {
+		if ctxDone(ctx) {
+			return nil, false
+		}
 		result[i] = marker + seg
 	}
-	return result
+	return result, true
 }
 
 func splitDiffMarker(line string) (marker string, markerWidth int, remainder string, ok bool) {

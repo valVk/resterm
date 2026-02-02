@@ -545,15 +545,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			skipViewport := false
 			if keyMsg, ok := msg.(tea.KeyMsg); ok {
 				switch keyMsg.String() {
-				case "j", "k":
+				case "j", "k", "down", "up", "pgdown", "pgup":
 					skipViewport = true
 				}
 			}
 			if !skipViewport {
 				var paneCmd tea.Cmd
+				prevOffset := pane.viewport.YOffset
 				pane.viewport, paneCmd = pane.viewport.Update(msg)
 				if paneCmd != nil {
 					cmds = append(cmds, paneCmd)
+				}
+				if pane.viewport.YOffset != prevOffset {
+					if m.followRespCursorOnScroll(pane, prevOffset, pane.viewport.YOffset) {
+						cmds = append(cmds, m.syncResponsePane(m.responsePaneFocus))
+					}
 				}
 			}
 		}
@@ -632,8 +638,13 @@ func (m *Model) resetChordState() {
 	m.hasPendingChord = false
 	m.pendingChord = ""
 	m.pendingChordMsg = tea.KeyMsg{}
+	m.clearRepeatChord()
+}
+
+func (m *Model) clearRepeatChord() {
 	m.repeatChordActive = false
 	m.repeatChordPrefix = ""
+	m.repeatChordKey = ""
 }
 
 func (m *Model) navGate(kind navigator.Kind, warn string) bool {
@@ -1133,13 +1144,18 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 
 	if allowChord {
 		if !m.hasPendingChord && m.repeatChordActive && shortcutKey != "" {
-			if handled, chordCmd := m.resolveChord(m.repeatChordPrefix, shortcutKey, msg); handled {
-				m.suppressListKey = true
-				m.blockHistoryKey()
-				return combine(chordCmd)
+			if shortcutKey == m.repeatChordKey {
+				if handled, chordCmd := m.resolveChord(
+					m.repeatChordPrefix,
+					shortcutKey,
+					msg,
+				); handled {
+					m.suppressListKey = true
+					m.blockHistoryKey()
+					return combine(chordCmd)
+				}
 			}
-			m.repeatChordActive = false
-			m.repeatChordPrefix = ""
+			m.clearRepeatChord()
 		}
 		if m.hasPendingChord {
 			storedMsg := m.pendingChordMsg
@@ -1158,8 +1174,7 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 			m.suppressListKey = true
 			keyStr = msg.String()
 		} else if m.canStartChord(msg, shortcutKey) {
-			m.repeatChordActive = false
-			m.repeatChordPrefix = ""
+			m.clearRepeatChord()
 			m.pendingChord = shortcutKey
 			m.pendingChordMsg = msg
 			m.hasPendingChord = true
@@ -1273,8 +1288,7 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 					m.suppressEditorKey = true
 					return combine(cmd)
 				}
-				m.repeatChordActive = false
-				m.repeatChordPrefix = ""
+				m.clearRepeatChord()
 				m.startOperator("d")
 				m.suppressEditorKey = true
 				m.suppressListKey = true
@@ -1295,8 +1309,7 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 					m.suppressEditorKey = true
 					return combine(cmd)
 				}
-				m.repeatChordActive = false
-				m.repeatChordPrefix = ""
+				m.clearRepeatChord()
 				m.startOperator("c")
 				m.suppressEditorKey = true
 				m.suppressListKey = true
@@ -1333,7 +1346,7 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 				editorPtr := &m.editor
 				editorPtr.ClearSelection()
 				pos := editorPtr.caretPosition()
-				lineLen := lineLength(editorPtr.Value(), pos.Line)
+				lineLen := editorPtr.LineLength(pos.Line)
 				targetCol := pos.Column
 				if targetCol < lineLen {
 					targetCol++
@@ -1455,6 +1468,9 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 			return combine(nil)
 		}
 		pane := m.focusedPane()
+		if cmd, handled := m.handleResponseSelectionKey(msg, pane); handled {
+			return combine(cmd)
+		}
 		if pane != nil && pane.activeTab == responseTabCompare {
 			if cmd := m.handleCompareTabKey(msg, pane); cmd != nil {
 				return combine(cmd)
@@ -1510,9 +1526,9 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 			if pane.activeTab == responseTabHistory {
 				return combine(nil)
 			}
-			pane.viewport.ScrollDown(1)
-			pane.setCurrPosition()
-			return combine(nil)
+			return combine(m.scrollResponseViewport(pane, func() {
+				pane.viewport.ScrollDown(1)
+			}))
 		case "up", "k", "shift+k", "K":
 			if pane == nil {
 				return combine(nil)
@@ -1536,9 +1552,9 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 			if pane.activeTab == responseTabHistory {
 				return combine(nil)
 			}
-			pane.viewport.ScrollUp(1)
-			pane.setCurrPosition()
-			return combine(nil)
+			return combine(m.scrollResponseViewport(pane, func() {
+				pane.viewport.ScrollUp(1)
+			}))
 		case "pgdown":
 			if pane == nil {
 				return combine(nil)
@@ -1546,9 +1562,9 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 			if pane.activeTab == responseTabHistory {
 				break
 			}
-			pane.viewport.PageDown()
-			pane.setCurrPosition()
-			return combine(nil)
+			return combine(m.scrollResponseViewport(pane, func() {
+				pane.viewport.PageDown()
+			}))
 		case "pgup":
 			if pane == nil {
 				return combine(nil)
@@ -1556,9 +1572,9 @@ func (m *Model) handleKeyWithChord(msg tea.KeyMsg, allowChord bool) tea.Cmd {
 			if pane.activeTab == responseTabHistory {
 				break
 			}
-			pane.viewport.PageUp()
-			pane.setCurrPosition()
-			return combine(nil)
+			return combine(m.scrollResponseViewport(pane, func() {
+				pane.viewport.PageUp()
+			}))
 		case "left", "ctrl+h", "h":
 			return combine(m.activatePrevTabFor(m.responsePaneFocus))
 		case "right", "ctrl+l", "l":
@@ -1713,10 +1729,10 @@ func (m *Model) resolveChord(prefix string, next string, msg tea.KeyMsg) (bool, 
 	}
 	if binding.Repeatable {
 		m.repeatChordPrefix = prefix
+		m.repeatChordKey = next
 		m.repeatChordActive = true
 	} else {
-		m.repeatChordActive = false
-		m.repeatChordPrefix = ""
+		m.clearRepeatChord()
 	}
 	cmd, handled := m.runShortcutBinding(binding, msg)
 	if !handled {

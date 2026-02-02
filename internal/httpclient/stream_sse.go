@@ -19,9 +19,6 @@ import (
 )
 
 const (
-	streamHeaderType    = "X-Resterm-Stream-Type"
-	streamHeaderSummary = "X-Resterm-Stream-Summary"
-
 	sseMetaReason = "resterm.summary.reason"
 	sseMetaBytes  = "resterm.summary.bytes"
 	sseMetaEvents = "resterm.summary.events"
@@ -80,23 +77,22 @@ func (c *Client) StartSSE(
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 
-	factory := c.resolveHTTPFactory()
-	if factory == nil {
-		cancel()
-		return nil, nil, errdef.New(errdef.CodeHTTP, "http client factory unavailable")
-	}
-	client, err := factory(effectiveOpts)
+	client, err := c.streamClient(effectiveOpts)
 	if err != nil {
 		cancel()
 		return nil, nil, err
 	}
-	client.Timeout = 0
 
 	start := time.Now()
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		cancel()
 		return nil, nil, errdef.Wrap(errdef.CodeHTTP, err, "perform sse request")
+	}
+	if verErr := checkHTTPVersion(httpResp, effectiveOpts.HTTPVersion); verErr != nil {
+		_ = httpResp.Body.Close()
+		cancel()
+		return nil, nil, verErr
 	}
 
 	contentType := strings.ToLower(httpResp.Header.Get("Content-Type"))

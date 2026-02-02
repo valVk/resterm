@@ -2,6 +2,105 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.21.1](https://github.com/unkn0wn-root/resterm/compare/v0.20.3...v0.21.1) (2026-01-30)
+
+
+### Features
+
+* rewrite response wrapping logic ([a461e21](https://github.com/unkn0wn-root/resterm/commit/a461e21cab1a6141dba9e831d0f36bcbab2cb851))
+
+
+### Bug Fixes
+
+* preserve ANSI colors across wraps and avoid indent-only lines ([423df16](https://github.com/unkn0wn-root/resterm/commit/423df16db73c01b646f71ad6f775cead30f436fc))
+
+### [0.20.3](https://github.com/unkn0wn-root/resterm/compare/v0.20.2...v0.20.3) (2026-01-30)
+
+
+### Features
+
+* async wrap ([d7f5ade](https://github.com/unkn0wn-root/resterm/commit/d7f5ade878f1ee96a5952a1e9ce583e88dd83d5d))
+* **ui:** async response formatting with ctx ([c75151b](https://github.com/unkn0wn-root/resterm/commit/c75151b107b42e1bb393111171f087ec7caaa426))
+
+
+### Bug Fixes
+
+* tests and use new cacheForTab ([747f83b](https://github.com/unkn0wn-root/resterm/commit/747f83b3c75e354251063e3c97919ecbddfc77e1))
+
+### [0.20.2](https://github.com/unkn0wn-root/resterm/compare/v0.20.1...v0.20.2) (2026-01-29)
+
+
+### Features
+
+* activate cursor with v ([506a162](https://github.com/unkn0wn-root/resterm/commit/506a1622c49c219928518df60facba40fe25714e))
+
+
+### Bug Fixes
+
+* tests ([79bfc73](https://github.com/unkn0wn-root/resterm/commit/79bfc73363aa7f94caaeaef5c6e8da47c184acaa))
+* **ui:** preserve real trailing newlines and skip idle cursor decoration ([4b45f42](https://github.com/unkn0wn-root/resterm/commit/4b45f42dbca9ce33be3809897ce767e992a46117))
+
+### [0.20.1](https://github.com/unkn0wn-root/resterm/compare/v0.20.0...v0.20.1) (2026-01-28)
+
+
+### Bug Fixes
+
+* repeatable chord to require matching key ([91a8a29](https://github.com/unkn0wn-root/resterm/commit/91a8a2902ac56da59e2818a9a30e9d90639646ab))
+
+## [0.20.0](https://github.com/unkn0wn-root/resterm/compare/v0.19.2...v0.20.0) (2026-01-28)
+
+
+### Features
+
+* add copy selection to response tab ([5495b0c](https://github.com/unkn0wn-root/resterm/commit/5495b0cd409e3c6768e5ac55e4d4e5b871187cae))
+* add cursor ([e568e6c](https://github.com/unkn0wn-root/resterm/commit/e568e6c218615971baac9812bb670c1a4a07c4eb))
+
+
+### Bug Fixes
+
+* scrolling with cursor enabled ([a756f0b](https://github.com/unkn0wn-root/resterm/commit/a756f0b15264e13d4a718e0e35a99c826eba3fb0))
+* scrolling with cursor enabled ([4b6c23f](https://github.com/unkn0wn-root/resterm/commit/4b6c23f51f1496dffc88afa97e4ceec709c4952e))
+* tests ([c133745](https://github.com/unkn0wn-root/resterm/commit/c133745e2d64c8d611539e76cf222095fd884621))
+
+### [0.19.2](https://github.com/unkn0wn-root/resterm/compare/v0.19.1...v0.19.2) (2026-01-27)
+
+
+### Features
+
+* add duration offsets for timestamps and RTS time helpers ([c3679e6](https://github.com/unkn0wn-root/resterm/commit/c3679e6ed865bc9ec131be817ba9195baeda710f))
+
+
+### Bug Fixes
+
+* **editor:** make visual selection inclusive ([35fe52b](https://github.com/unkn0wn-root/resterm/commit/35fe52bdbbc952e465947e7f29f2d3c6258c7dbf))
+* **httpclient:** preserve graphql GET URL mutation and expand override templates ([4307853](https://github.com/unkn0wn-root/resterm/commit/4307853c7944d226c3115ee4d5cd91af3bab1d53))
+
+### [0.19.1](https://github.com/unkn0wn-root/resterm/compare/v0.18.6...v0.19.1) (2026-01-21)
+
+
+### Features
+
+* http-version setting with strict HTTP/2 enforcement ([5a58adc](https://github.com/unkn0wn-root/resterm/commit/5a58adc42dee2d0b59e4048229f19df6a19b796c))
+* **restermscript:** add top level module def ([ce2c670](https://github.com/unkn0wn-root/resterm/commit/ce2c67026c38aa34e6ecedd9bc581f41efee5fb9))
+* **rts:** add preflight `[@use](https://github.com/use)` alias resolution ([3e4fd66](https://github.com/unkn0wn-root/resterm/commit/3e4fd66f531cbfe534d5b53d8858b3b9b82afd54))
+
+### [0.18.6](https://github.com/unkn0wn-root/resterm/compare/v0.18.5...v0.18.6) (2026-01-17)
+
+
+### Bug Fixes
+
+* validate workflow expect values ([ac0570d](https://github.com/unkn0wn-root/resterm/commit/ac0570d78dfe77b78ed2ae85eff05f65fa7d3d70))
+* workflow expect status handling ([4e12f64](https://github.com/unkn0wn-root/resterm/commit/4e12f643cc33577e78636fcb91fed940e9fb95fb))
+
+### [0.18.5](https://github.com/unkn0wn-root/resterm/compare/v0.18.4...v0.18.5) (2026-01-14)
+
+### [0.18.4](https://github.com/unkn0wn-root/resterm/compare/v0.18.3...v0.18.4) (2026-01-14)
+
+
+### Bug Fixes
+
+* template expansion via rts scripts and stdlib ([6799099](https://github.com/unkn0wn-root/resterm/commit/6799099e8f7ea005301980b9c585d0202225edc2))
+
 ### [0.18.3](https://github.com/unkn0wn-root/resterm/compare/v0.18.2...v0.18.3) (2026-01-14)
 
 ### [0.18.2](https://github.com/unkn0wn-root/resterm/compare/v0.18.1...v0.18.2) (2026-01-13)

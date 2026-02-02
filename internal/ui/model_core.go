@@ -292,6 +292,8 @@ type Model struct {
 	responseRenderToken  string
 	responseLoading      bool
 	responseLoadingFrame int
+	responseRenderCancel context.CancelFunc
+	respTasks            *respTasks
 
 	activeThemeKey      string
 	settingsHandle      config.SettingsHandle
@@ -325,6 +327,7 @@ type Model struct {
 	pendingChordMsg        tea.KeyMsg
 	hasPendingChord        bool
 	repeatChordPrefix      string
+	repeatChordKey         string
 	repeatChordActive      bool
 	operator               operatorState
 	suppressListKey        bool
@@ -635,6 +638,7 @@ func New(cfg Config) Model {
 		mainSplitOrientation:     mainSplitVertical,
 		reqCompact:               &reqCompact,
 		wfCompact:                &wfCompact,
+		respTasks:                newRespTasks(),
 		responseTokens:           make(map[string]*responseSnapshot),
 		responseLastFocused:      responsePanePrimary,
 		focus:                    focusFile,

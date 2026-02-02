@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -22,6 +21,7 @@ import (
 	"github.com/unkn0wn-root/resterm/internal/errdef"
 	"github.com/unkn0wn-root/resterm/internal/grpcclient"
 	"github.com/unkn0wn-root/resterm/internal/httpclient"
+	"github.com/unkn0wn-root/resterm/internal/httpver"
 	"github.com/unkn0wn-root/resterm/internal/oauth"
 	"github.com/unkn0wn-root/resterm/internal/parser"
 	"github.com/unkn0wn-root/resterm/internal/restfile"
@@ -31,6 +31,7 @@ import (
 	"github.com/unkn0wn-root/resterm/internal/ssh"
 	"github.com/unkn0wn-root/resterm/internal/stream"
 	"github.com/unkn0wn-root/resterm/internal/traceutil"
+	"github.com/unkn0wn-root/resterm/internal/urltpl"
 	"github.com/unkn0wn-root/resterm/internal/util"
 	"github.com/unkn0wn-root/resterm/internal/vars"
 )
@@ -76,6 +77,12 @@ func (m *Model) cancelStatus() string {
 	if m.sending {
 		return "Canceling in-progress request..."
 	}
+	if m.responseLoading {
+		return "Canceling response formatting..."
+	}
+	if m.hasReflowPending() {
+		return "Canceling response reflow..."
+	}
 	return "Canceling..."
 }
 
@@ -83,8 +90,27 @@ func (m *Model) hasActiveRun() bool {
 	return m.sending || m.profileRun != nil || m.workflowRun != nil || m.compareRun != nil
 }
 
+func (m Model) hasReflowPending() bool {
+	for i := range m.responsePanes {
+		pane := &m.responsePanes[i]
+		if pane.reflow == nil {
+			continue
+		}
+		for _, state := range pane.reflow {
+			if reflowStateLive(pane, state) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (m Model) spinnerActive() bool {
+	return m.sending || m.responseLoading || m.hasReflowPending()
+}
+
 func (m *Model) cancelActiveRuns() tea.Cmd {
-	if !m.hasActiveRun() {
+	if !m.hasActiveRun() && !m.responseLoading && !m.hasReflowPending() {
 		return nil
 	}
 	return m.cancelRuns(m.cancelStatus())
@@ -110,8 +136,58 @@ func (m *Model) cancelRuns(status string) tea.Cmd {
 		cmds = append(cmds, cmd)
 	}
 	m.cancelInFlightSend(status)
+	if m.responseLoading {
+		if cmd := m.cancelResponseFormatting(""); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	if cmd := m.cancelResponseReflow(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 
 	return batchCmds(cmds)
+}
+
+func (m *Model) cancelResponseReflow() tea.Cmd {
+	canceled := false
+	for i := range m.responsePanes {
+		pane := &m.responsePanes[i]
+		if len(pane.reflow) == 0 {
+			continue
+		}
+		wasActive := m.reflowActiveForPane(pane)
+		for key, state := range pane.reflow {
+			markReflowCanceled(pane, key, state.snapshotID)
+		}
+		clearReflowAll(pane)
+		canceled = true
+
+		if wasActive {
+			m.showReflowCanceled(pane)
+		}
+	}
+	if !canceled {
+		return nil
+	}
+	m.respSpinStop()
+	if !m.hasActiveRun() && !m.responseLoading && !m.hasReflowPending() {
+		m.setStatusMessage(statusMsg{})
+	}
+	return nil
+}
+
+func (m *Model) showReflowCanceled(pane *responsePaneState) {
+	if pane == nil {
+		return
+	}
+	tab := pane.activeTab
+	if tab == responseTabHistory {
+		return
+	}
+
+	_, ww, h := paneDims(pane, tab)
+	sr, sid := paneSnap(pane)
+	m.applyReflowCanceled(pane, tab, ww, h, sr, sid)
 }
 
 func (m *Model) cancelProfileRun(reason string) tea.Cmd {
@@ -903,7 +979,7 @@ func (m *Model) startSending() tea.Cmd {
 
 func (m *Model) stopSending() {
 	m.sending = false
-	m.stopTabSpin()
+	m.stopTabSpinIfIdle()
 }
 
 func (m *Model) stopStatusPulse() {
@@ -944,8 +1020,15 @@ func (m *Model) stopTabSpin() {
 	m.tabSpinIdx = 0
 }
 
+func (m *Model) stopTabSpinIfIdle() {
+	if m.spinnerActive() {
+		return
+	}
+	m.stopTabSpin()
+}
+
 func (m *Model) scheduleTabSpin() tea.Cmd {
-	if !m.tabSpinOn || !m.sending || len(tabSpinFrames) == 0 {
+	if !m.tabSpinOn || !m.spinnerActive() || len(tabSpinFrames) == 0 {
 		return nil
 	}
 	seq := m.tabSpinSeq
@@ -955,7 +1038,7 @@ func (m *Model) scheduleTabSpin() tea.Cmd {
 }
 
 func (m *Model) startTabSpin() tea.Cmd {
-	if m.tabSpinOn || !m.sending || len(tabSpinFrames) == 0 {
+	if m.tabSpinOn || !m.spinnerActive() || len(tabSpinFrames) == 0 {
 		return nil
 	}
 	m.tabSpinOn = true
@@ -968,7 +1051,7 @@ func (m *Model) handleTabSpin(msg tabSpinMsg) tea.Cmd {
 	if msg.seq != m.tabSpinSeq {
 		return nil
 	}
-	if !m.tabSpinOn || !m.sending || len(tabSpinFrames) == 0 {
+	if !m.tabSpinOn || !m.spinnerActive() || len(tabSpinFrames) == 0 {
 		m.stopTabSpin()
 		return nil
 	}
@@ -2383,17 +2466,9 @@ func applyPreRequestOutput(req *restfile.Request, out scripts.PreRequestOutput) 
 	}
 
 	if len(out.Query) > 0 {
-		parsed, err := url.Parse(req.URL)
-		if err != nil {
+		if err := applyPreRequestQuery(req, out.Query); err != nil {
 			return errdef.Wrap(errdef.CodeScript, err, "invalid url after script")
 		}
-
-		query := parsed.Query()
-		for key, value := range out.Query {
-			query.Set(key, value)
-		}
-		parsed.RawQuery = query.Encode()
-		req.URL = parsed.String()
 	}
 	if out.Headers != nil {
 		if req.Headers == nil {
@@ -2412,6 +2487,27 @@ func applyPreRequestOutput(req *restfile.Request, out scripts.PreRequestOutput) 
 		req.Body.GraphQL = nil
 	}
 	setRequestVars(req, out.Variables)
+	return nil
+}
+
+func applyPreRequestQuery(req *restfile.Request, q map[string]string) error {
+	if req == nil || len(q) == 0 {
+		return nil
+	}
+	raw := strings.TrimSpace(req.URL)
+	patch := make(map[string]*string, len(q))
+	for key, value := range q {
+		val := value
+		patch[key] = &val
+	}
+	updated, err := urltpl.PatchQuery(raw, patch)
+	if err != nil {
+		return err
+	}
+	if raw == "" && updated == "" {
+		return nil
+	}
+	req.URL = updated
 	return nil
 }
 
@@ -2768,6 +2864,7 @@ func inlineRequestFromLine(raw string, lineNumber int) *restfile.Request {
 	url := ""
 
 	fields := strings.Fields(trimmed)
+	fields, ver := httpver.SplitToken(fields)
 	if len(fields) == 1 {
 		url = fields[0]
 	} else if len(fields) >= 2 {
@@ -2779,7 +2876,7 @@ func inlineRequestFromLine(raw string, lineNumber int) *restfile.Request {
 	}
 
 	if url == "" {
-		url = trimmed
+		url = strings.Join(fields, " ")
 	}
 
 	url = strings.Trim(url, "\"'")
@@ -2795,6 +2892,7 @@ func inlineRequestFromLine(raw string, lineNumber int) *restfile.Request {
 			End:   lineNumber,
 		},
 		OriginalText: raw,
+		Settings:     httpver.SetIfMissing(nil, ver),
 	}
 }
 

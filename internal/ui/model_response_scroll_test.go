@@ -154,3 +154,143 @@ func TestScrollShortcutUsesNavigatorWhenFocused(t *testing.T) {
 		t.Fatalf("expected navigator selection to move to bottom, got %+v", sel)
 	}
 }
+
+func TestScrollResponseToEdgeUpdatesCursor(t *testing.T) {
+	snap := &responseSnapshot{id: "snap", ready: true}
+	model := newModelWithResponseTab(responseTabPretty, snap)
+	pane := model.pane(responsePanePrimary)
+	pane.viewport.Width = 40
+	pane.viewport.Height = 3
+
+	content := "one\ntwo\nthree\nfour\nfive\nsix"
+	pane.snapshot.pretty = content
+	pane.wrapCache[responseTabPretty] = wrapCache(
+		responseTabPretty,
+		content,
+		responseWrapWidth(responseTabPretty, pane.viewport.Width),
+	)
+	pane.viewport.SetContent(content)
+	pane.cursor = respCursor{
+		on:   true,
+		line: 4,
+		tab:  responseTabPretty,
+		sid:  "snap",
+	}
+
+	model.scrollResponseToTop()
+	if pane.cursor.line != 0 {
+		t.Fatalf("expected cursor to move to top line, got %d", pane.cursor.line)
+	}
+
+	model.scrollResponseToBottom()
+	expected := len(strings.Split(content, "\n")) - 1
+	if pane.cursor.line != expected {
+		t.Fatalf("expected cursor to move to bottom line %d, got %d", expected, pane.cursor.line)
+	}
+}
+
+func TestResponseScrollKeepsCursorInView(t *testing.T) {
+	snap := &responseSnapshot{id: "snap", ready: true}
+	model := newModelWithResponseTab(responseTabPretty, snap)
+	pane := model.pane(responsePanePrimary)
+	pane.viewport.Width = 20
+	pane.viewport.Height = 3
+
+	content := "one\ntwo\nthree\nfour\nfive"
+	pane.snapshot.pretty = content
+	pane.wrapCache[responseTabPretty] = wrapCache(
+		responseTabPretty,
+		content,
+		responseWrapWidth(responseTabPretty, pane.viewport.Width),
+	)
+	pane.viewport.SetContent(content)
+	pane.cursor = respCursor{
+		on:   true,
+		line: 0,
+		tab:  responseTabPretty,
+		sid:  "snap",
+	}
+
+	model.scrollResponseViewport(pane, func() {
+		pane.viewport.ScrollDown(1)
+	})
+
+	cache := pane.wrapCache[responseTabPretty]
+	expected := cache.rev[pane.viewport.YOffset]
+	if pane.cursor.line != expected {
+		t.Fatalf(
+			"expected cursor to follow viewport to line %d, got %d",
+			expected,
+			pane.cursor.line,
+		)
+	}
+}
+
+func TestResponseScrollPreservesCursorRow(t *testing.T) {
+	snap := &responseSnapshot{id: "snap", ready: true}
+	model := newModelWithResponseTab(responseTabPretty, snap)
+	pane := model.pane(responsePanePrimary)
+	pane.viewport.Width = 20
+	pane.viewport.Height = 3
+
+	content := "one\ntwo\nthree\nfour\nfive\nsix"
+	pane.snapshot.pretty = content
+	pane.wrapCache[responseTabPretty] = wrapCache(
+		responseTabPretty,
+		content,
+		responseWrapWidth(responseTabPretty, pane.viewport.Width),
+	)
+	pane.viewport.SetContent(content)
+	pane.viewport.SetYOffset(1)
+	pane.cursor = respCursor{
+		on:   true,
+		line: 2,
+		tab:  responseTabPretty,
+		sid:  "snap",
+	}
+
+	model.scrollResponseViewport(pane, func() {
+		pane.viewport.ScrollDown(1)
+	})
+
+	if pane.cursor.line != 3 {
+		t.Fatalf(
+			"expected cursor to stay on middle row after scroll, got line %d",
+			pane.cursor.line,
+		)
+	}
+}
+
+func TestResponseScrollBringsCursorIntoView(t *testing.T) {
+	snap := &responseSnapshot{id: "snap", ready: true}
+	model := newModelWithResponseTab(responseTabPretty, snap)
+	pane := model.pane(responsePanePrimary)
+	pane.viewport.Width = 20
+	pane.viewport.Height = 3
+
+	content := "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight"
+	pane.snapshot.pretty = content
+	pane.wrapCache[responseTabPretty] = wrapCache(
+		responseTabPretty,
+		content,
+		responseWrapWidth(responseTabPretty, pane.viewport.Width),
+	)
+	pane.viewport.SetContent(content)
+	pane.viewport.SetYOffset(3)
+	pane.cursor = respCursor{
+		on:   true,
+		line: 0,
+		tab:  responseTabPretty,
+		sid:  "snap",
+	}
+
+	model.scrollResponseViewport(pane, func() {
+		pane.viewport.ScrollDown(1)
+	})
+
+	cache := pane.wrapCache[responseTabPretty]
+	expected := cache.rev[pane.viewport.YOffset]
+	if pane.cursor.line != expected {
+		t.Fatalf("expected cursor to snap into view at line %d, got %d", expected, pane.cursor.line)
+	}
+}

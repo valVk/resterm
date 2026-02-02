@@ -104,27 +104,31 @@ func (c *Client) StartWebSocket(
 		return nil, nil, errdef.New(errdef.CodeHTTP, "websocket metadata missing")
 	}
 
+	effective := applyRequestSettings(opts, req.Settings)
+	if verErr := checkWebSocketHTTPVersion(effective.HTTPVersion); verErr != nil {
+		return nil, nil, verErr
+	}
+
 	wsOpts := req.WebSocket.Options
 	handshakeCtx, handshakeCancel := ctxWithTimeout(ctx, wsOpts.HandshakeTimeout)
 	defer handshakeCancel()
 
-	httpReq, effectiveOpts, err := c.prepareHTTPRequest(handshakeCtx, req, resolver, opts)
+	httpReq, effectiveOpts, err := c.prepareHTTPRequestWithOpts(
+		handshakeCtx,
+		req,
+		resolver,
+		effective,
+	)
 	if err != nil {
 		handshakeCancel()
 		return nil, nil, err
 	}
 
-	factory := c.resolveHTTPFactory()
-	if factory == nil {
-		handshakeCancel()
-		return nil, nil, errdef.New(errdef.CodeHTTP, "http client factory unavailable")
-	}
-	client, err := factory(effectiveOpts)
+	client, err := c.streamClient(effectiveOpts)
 	if err != nil {
 		handshakeCancel()
 		return nil, nil, err
 	}
-	client.Timeout = 0
 
 	dialOpts := wsDialOptions(httpReq, wsOpts, client)
 
@@ -353,7 +357,7 @@ func (c *Client) runWSSteps(
 	wsReq := req.WebSocket
 	ctx := session.Context()
 	recvWindow := wsRecvWindow(wsReq.Options)
-	fallbacks, allowRaw := resolveFileLookup(baseDir, opts)
+	lookup := newFileLookup(baseDir, opts)
 	closedByScript := false
 
 	for idx, step := range wsReq.Steps {
@@ -392,13 +396,7 @@ func (c *Client) runWSSteps(
 			}
 			waitForWindow(ctx, recvWindow)
 		case restfile.WebSocketStepSendFile:
-			data, _, readErr := c.readFileWithFallback(
-				step.File,
-				baseDir,
-				fallbacks,
-				allowRaw,
-				"websocket payload file",
-			)
+			data, _, readErr := lookup.read(c, step.File, "websocket payload file")
 			if readErr != nil {
 				session.Cancel()
 				return false, readErr

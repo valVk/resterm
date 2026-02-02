@@ -374,6 +374,26 @@ func TestRequestEditorVisualYankIncludesCaretRune(t *testing.T) {
 	}
 }
 
+func TestRequestEditorVisualYankIncludesLastRune(t *testing.T) {
+	editor := newTestEditor("abc")
+	editorPtr := &editor
+	editorPtr.moveCursorTo(0, 0)
+
+	editor, _ = editor.ToggleVisual()
+	editor, _ = editor.Update(tea.KeyMsg{Type: tea.KeyRight})
+	editor, _ = editor.Update(tea.KeyMsg{Type: tea.KeyRight})
+
+	editor, cmd := editor.YankSelection()
+	_ = editorEventFromCmd(t, cmd)
+
+	if got := editor.registerText; got != "abc" {
+		t.Fatalf("expected visual yank to include last rune, got %q", got)
+	}
+	if editor.hasSelection() {
+		t.Fatalf("expected selection to clear after yank")
+	}
+}
+
 func TestRequestEditorUndoRestoresDeletion(t *testing.T) {
 	editor := newTestEditor("alpha")
 	editorPtr := &editor
@@ -1023,6 +1043,42 @@ func TestRequestEditorMetadataHintsSuggestAndAccept(t *testing.T) {
 	}
 	if got := editor.Value(); !strings.HasPrefix(got, "# @name ") {
 		t.Fatalf("expected @name completion, got %q", got)
+	}
+	if editor.metadataHints.active {
+		t.Fatal("expected metadata hints to close after acceptance")
+	}
+}
+
+func TestRequestEditorMetadataHintsSecondLineAnchor(t *testing.T) {
+	editor := newTestEditor("GET https://example.com\n# ")
+	editorPtr := &editor
+	editorPtr.moveCursorTo(1, 2)
+	editorPtr.SetMetadataHintsEnabled(true)
+
+	keys := []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'@'}},
+		{Type: tea.KeyRunes, Runes: []rune{'n'}},
+		{Type: tea.KeyRunes, Runes: []rune{'a'}},
+	}
+	for _, key := range keys {
+		var cmd tea.Cmd
+		editor, cmd = editor.Update(key)
+		if cmd != nil {
+			cmd()
+		}
+	}
+
+	if !editor.metadataHints.active {
+		t.Fatal("expected metadata hints to activate on the second line")
+	}
+
+	editor, cmd := editor.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	evt := editorEventFromCmd(t, cmd)
+	if !evt.dirty {
+		t.Fatal("expected autocomplete acceptance to mark editor dirty")
+	}
+	if got := editor.Value(); got != "GET https://example.com\n# @name " {
+		t.Fatalf("expected @name completion on second line, got %q", got)
 	}
 	if editor.metadataHints.active {
 		t.Fatal("expected metadata hints to close after acceptance")

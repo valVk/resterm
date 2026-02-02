@@ -17,6 +17,15 @@ func Align(sel, off, h, total int) int {
 			return offset
 		}
 	}
+	buf := h / 4
+	if buf < 1 {
+		buf = 1
+	}
+	return AlignWithBuffer(sel, off, h, total, buf)
+}
+
+// AlignWithBuffer is like Align but allows an explicit buffer size.
+func AlignWithBuffer(sel, off, h, total, buf int) int {
 	if h <= 0 || total <= 0 {
 		return 0
 	}
@@ -41,9 +50,11 @@ func Align(sel, off, h, total int) int {
 		return maxOff
 	}
 
-	buf := h / 4
-	if buf < 1 {
-		buf = 1
+	if buf < 0 {
+		buf = 0
+	}
+	if buf > h-1 {
+		buf = h - 1
 	}
 	top := off + buf
 	bot := off + h - 1 - buf

@@ -23,7 +23,7 @@ const (
 )
 
 var headerSegmentIcons = map[string]string{
-	"resterm":   "✦",
+	"resterm":   ">_",
 	"workspace": "▣",
 	"env":       "⬢",
 	"requests":  "⇄",
@@ -896,6 +896,10 @@ func (m Model) renderResponseColumn(id responsePaneID, focused bool, maxWidth in
 	}
 	if send := m.sendingView(pane, contentWidth, contentHeight); send != "" {
 		content = send
+	} else if formatting := m.formattingView(pane, contentWidth, contentHeight); formatting != "" {
+		content = formatting
+	} else if reflowing := m.reflowView(pane, contentWidth, contentHeight); reflowing != "" {
+		content = reflowing
 	}
 	content = lipgloss.NewStyle().
 		MaxWidth(contentWidth).
@@ -1070,7 +1074,7 @@ var tabSpinFrames = []string{
 const responseSendingBase = "Sending request"
 
 func (m Model) tabSpinner() string {
-	if !m.sending || len(tabSpinFrames) == 0 {
+	if !m.spinnerActive() || len(tabSpinFrames) == 0 {
 		return ""
 	}
 	idx := m.tabSpinIdx
@@ -1080,17 +1084,78 @@ func (m Model) tabSpinner() string {
 	return tabSpinFrames[idx%len(tabSpinFrames)]
 }
 
-func (m Model) sendingView(pane *responsePaneState, width, height int) string {
-	if pane == nil || !pane.followLatest || pane.activeTab == responseTabHistory {
+func (m Model) spinnerView(
+	pane *responsePaneState,
+	width, height int,
+	base string,
+	active bool,
+) string {
+	if !m.paneAllowsOverlay(pane) || !pane.followLatest || !active {
 		return ""
 	}
 	spin := m.tabSpinner()
 	if spin == "" {
 		return ""
 	}
-	msg := responseSendingBase + " " + spin
+	msg := base + " " + spin
 	centered := centerContent(msg, width, height)
 	return m.applyResponseContentStyles(pane.activeTab, centered)
+}
+
+func (m Model) sendingView(pane *responsePaneState, width, height int) string {
+	return m.spinnerView(pane, width, height, responseSendingBase, m.sending)
+}
+
+func (m Model) formattingView(pane *responsePaneState, width, height int) string {
+	return m.spinnerView(pane, width, height, responseFormattingBase, m.responseLoading)
+}
+
+func (m Model) reflowView(pane *responsePaneState, width, height int) string {
+	if !m.reflowActiveForPane(pane) {
+		return ""
+	}
+	msg := m.responseReflowMessage()
+	if msg == "" {
+		return ""
+	}
+	centered := centerContent(msg, width, height)
+	return m.applyResponseContentStyles(pane.activeTab, centered)
+}
+
+func (m Model) paneAllowsOverlay(pane *responsePaneState) bool {
+	if pane == nil {
+		return false
+	}
+	return tabAllowsOverlay(pane.activeTab)
+}
+
+func (m Model) reflowActiveForPane(pane *responsePaneState) bool {
+	if !m.paneAllowsOverlay(pane) {
+		return false
+	}
+	key, ok := reflowKeyForPane(pane)
+	if !ok || pane.reflow == nil {
+		return false
+	}
+	state, ok := pane.reflow[key]
+	if !ok || state.token == "" || state.tab != pane.activeTab || state.snapshotID == "" {
+		return false
+	}
+	snap := pane.snapshot
+	if snap == nil || !snap.ready || snap.id != state.snapshotID {
+		return false
+	}
+	switch state.tab {
+	case responseTabRaw:
+		if snap.rawMode != state.mode {
+			return false
+		}
+	case responseTabHeaders:
+		if pane.headersView != state.headers {
+			return false
+		}
+	}
+	return true
 }
 
 func (m Model) tabBadgeText(mode string) string {
@@ -1362,7 +1427,7 @@ func (m Model) renderCommandBar() string {
 	}
 	segments := []hint{
 		{key: "Tab", label: "Focus"},
-		{key: "Enter", label: "Run/Send"},
+		{key: "Enter", label: "Run"},
 		{key: "^C", label: "Cancel"},
 		{key: "^S", label: "Save"},
 		{key: "^N", label: "New"},
@@ -2645,6 +2710,15 @@ func (m Model) renderHelpOverlay() string {
 				{"p / P", "Paste after / before cursor"},
 				{"f / t / T", "Find character (forward / till / backward)"},
 				{"u / Ctrl+r", "Undo / redo last edit"},
+			},
+		},
+		{
+			title: "Response selection",
+			entries: []helpEntry{
+				{"v / V", "Response: show cursor / start selection"},
+				{"j / k / ↑ / ↓", "Response: move cursor / extend selection"},
+				{"y / c", "Response: copy selection"},
+				{"Esc", "Response: clear selection (again clears cursor)"},
 			},
 		},
 		{

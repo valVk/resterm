@@ -183,6 +183,14 @@ func TestStdlibTimeExtras(t *testing.T) {
 	if v.K != VNum || v.N != 3.75 {
 		t.Fatalf("expected time.addUnix")
 	}
+	v = evalExprCtx(t, ctx, "time.addUnix(1.5, \"2.25s\")")
+	if v.K != VNum || v.N != 3.75 {
+		t.Fatalf("expected time.addUnix duration string")
+	}
+	v = evalExprCtx(t, ctx, "time.duration(\"1h30m\")")
+	if v.K != VNum || v.N != 5400 {
+		t.Fatalf("expected time.duration")
+	}
 }
 
 func TestStdlibJSONFile(t *testing.T) {
@@ -284,6 +292,19 @@ func TestStdlibQueryHelpers(t *testing.T) {
 	v = evalExprCtx(t, ctx, "len(query.parse(query.merge(\"https://x.test?p=1&q=2\", {q: null})))")
 	if v.K != VNum || v.N != 1 {
 		t.Fatalf("expected query length 1")
+	}
+	v = evalExprCtx(t, ctx, "query.merge(\"{{host}}/path?keep=1\", {q: \"x\"})")
+	if v.K != VStr {
+		t.Fatalf("expected query.merge to return string")
+	}
+	if !strings.Contains(v.S, "{{host}}") {
+		t.Fatalf("expected templated host preserved, got %q", v.S)
+	}
+	if strings.Contains(v.S, "%7B%7B") || strings.Contains(v.S, "%7D%7D") {
+		t.Fatalf("expected template braces to remain unescaped, got %q", v.S)
+	}
+	if !strings.Contains(v.S, "keep=1") || !strings.Contains(v.S, "q=x") {
+		t.Fatalf("expected merged query params, got %q", v.S)
 	}
 }
 
