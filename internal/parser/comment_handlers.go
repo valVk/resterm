@@ -39,17 +39,33 @@ func (b *documentBuilder) handleComment(line int, text string) {
 	if b.handleSSHDirective(line, key, rest) {
 		return
 	}
+	if b.handleK8sDirective(line, key, rest) {
+		return
+	}
+	if b.handlePatchDirective(line, key, rest) {
+		return
+	}
 	if b.handleFileSettingsDirective(key, rest) {
 		return
 	}
 
-	if !b.ensureRequest(line) {
-		return
+	startedRequest := false
+	if !b.inRequest {
+		startedRequest = true
 	}
+	b.ensureRequest(line)
 	if b.handleRequestBuilderDirective(key, rest) {
 		return
 	}
-	b.handleRequestMetadataDirective(line, key, rest)
+	if b.handleRequestMetadataDirective(line, key, rest) {
+		return
+	}
+	if startedRequest {
+		// Unknown directive outside requests should be ignored, not create a
+		// synthetic request that captures subsequent shorthand vars.
+		b.inRequest = false
+		b.request = nil
+	}
 }
 
 func (b *documentBuilder) handleWorkflowStart(line int, key, rest string) bool {
@@ -117,6 +133,31 @@ func (b *documentBuilder) handleSSHDirective(line int, key, rest string) bool {
 	return true
 }
 
+func (b *documentBuilder) handleK8sDirective(line int, key, rest string) bool {
+	if key != "k8s" {
+		return false
+	}
+	b.handleK8s(line, rest)
+	return true
+}
+
+func (b *documentBuilder) handlePatchDirective(line int, key, rest string) bool {
+	if key != "patch" {
+		return false
+	}
+	if b.inRequest {
+		b.addError(line, "@patch must be declared outside a request")
+		return true
+	}
+	spec, err := parsePatchSpec(rest, line)
+	if err != nil {
+		b.addError(line, err.Error())
+		return true
+	}
+	b.patchDefs = append(b.patchDefs, spec)
+	return true
+}
+
 func (b *documentBuilder) handleFileSettingsDirective(key, rest string) bool {
 	if b.inRequest {
 		return false
@@ -152,18 +193,20 @@ func (b *documentBuilder) handleRequestBuilderDirective(key, rest string) bool {
 	return false
 }
 
-func (b *documentBuilder) handleRequestMetadataDirective(line int, key, rest string) {
+func (b *documentBuilder) handleRequestMetadataDirective(line int, key, rest string) bool {
 	switch key {
 	case "name":
 		if rest != "" {
 			value := trimQuotes(strings.TrimSpace(rest))
 			b.request.metadata.Name = value
 		}
+		return true
 	case "description", "desc":
 		if b.request.metadata.Description != "" {
 			b.request.metadata.Description += "\n"
 		}
 		b.request.metadata.Description += rest
+		return true
 	case "tag", "tags":
 		tags := strings.Fields(rest)
 		if len(tags) == 0 {
@@ -178,51 +221,47 @@ func (b *documentBuilder) handleRequestMetadataDirective(line int, key, rest str
 				b.request.metadata.Tags = append(b.request.metadata.Tags, tag)
 			}
 		}
+		return true
 	case "no-log", "nolog":
 		b.request.metadata.NoLog = true
+		return true
 	case "log-sensitive-headers", "log-secret-headers":
 		if rest == "" {
 			b.request.metadata.AllowSensitiveHeaders = true
-			return
+			return true
 		}
 		if value, ok := parseBool(rest); ok {
 			b.request.metadata.AllowSensitiveHeaders = value
 		}
+		return true
 	case "auth":
 		spec := parseAuthSpec(rest)
 		if spec != nil {
 			b.request.metadata.Auth = spec
 		}
+		return true
 	case "settings":
-		if b.inRequest {
-			b.request.settings = applySettingsTokens(b.request.settings, rest)
-		} else {
-			b.fileSettings = applySettingsTokens(b.fileSettings, rest)
-		}
+		b.request.settings = applySettingsTokens(b.request.settings, rest)
+		return true
 	case "setting":
 		key, value := splitDirective(rest)
 		if key != "" {
-			if b.inRequest {
-				if b.request.settings == nil {
-					b.request.settings = make(map[string]string)
-				}
-				b.request.settings[key] = value
-			} else {
-				if b.fileSettings == nil {
-					b.fileSettings = make(map[string]string)
-				}
-				b.fileSettings[key] = value
+			if b.request.settings == nil {
+				b.request.settings = make(map[string]string)
 			}
+			b.request.settings[key] = value
 		}
+		return true
 	case "timeout":
 		if b.request.settings == nil {
 			b.request.settings = make(map[string]string)
 		}
 		b.request.settings["timeout"] = rest
+		return true
 	case "var":
 		name, value := parseNameValue(rest)
 		if name == "" {
-			return
+			return true
 		}
 		variable := restfile.Variable{
 			Name:   name,
@@ -232,72 +271,81 @@ func (b *documentBuilder) handleRequestMetadataDirective(line int, key, rest str
 			Secret: false,
 		}
 		b.request.variables = append(b.request.variables, variable)
+		return true
 	case "script":
 		if rest != "" {
 			kind, lang := parseScriptSpec(rest)
 			b.request.currentScriptKind = kind
 			b.request.currentScriptLang = lang
 		}
+		return true
 	case "apply":
-		if spec, ok := parseApplySpec(rest, line); ok {
-			b.request.metadata.Applies = append(b.request.metadata.Applies, spec)
-		} else {
-			b.addError(line, "@apply expression missing")
+		spec, err := parseApplySpec(rest, line)
+		if err != nil {
+			b.addError(line, err.Error())
+			return true
 		}
+		b.request.metadata.Applies = append(b.request.metadata.Applies, spec)
+		return true
 	case "capture":
 		if capture, ok := b.parseCaptureDirective(rest, line); ok {
 			b.request.metadata.Captures = append(b.request.metadata.Captures, capture)
 		}
+		return true
 	case "assert":
 		if spec, ok := b.parseAssertDirective(rest, line); ok {
 			b.request.metadata.Asserts = append(b.request.metadata.Asserts, spec)
 		} else {
 			b.addError(line, "@assert expression missing")
 		}
+		return true
 	case "when", "skip-if":
 		negate := key == "skip-if"
 		spec, err := parseConditionSpec(rest, line, negate)
 		if err != nil {
 			b.addError(line, err.Error())
-			return
+			return true
 		}
 		if b.request.metadata.When != nil {
 			b.addError(line, "@when directive already defined for this request")
-			return
+			return true
 		}
 		b.request.metadata.When = spec
+		return true
 	case "for-each":
 		spec, err := parseForEachSpec(rest, line)
 		if err != nil {
 			b.addError(line, err.Error())
-			return
+			return true
 		}
 		if b.request.metadata.ForEach != nil {
 			b.addError(line, "@for-each directive already defined for this request")
-			return
+			return true
 		}
 		b.request.metadata.ForEach = spec
+		return true
 	case "profile":
 		if spec := parseProfileSpec(rest); spec != nil {
 			b.request.metadata.Profile = spec
 		}
+		return true
 	case "trace":
 		if spec := parseTraceSpec(rest); spec != nil {
 			b.request.metadata.Trace = spec
 		}
+		return true
 	case "compare":
-		if !b.ensureRequest(line) {
-			return
-		}
 		if b.request.metadata.Compare != nil {
 			b.addError(line, "@compare directive already defined for this request")
-			return
+			return true
 		}
 		spec, err := parseCompareDirective(rest)
 		if err != nil {
 			b.addError(line, err.Error())
-			return
+			return true
 		}
 		b.request.metadata.Compare = spec
+		return true
 	}
+	return false
 }

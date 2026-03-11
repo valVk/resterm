@@ -6,6 +6,20 @@ import (
 	"unicode/utf8"
 )
 
+type TemplateStore interface {
+	Find(name string) (template, bool)
+	List() []template
+	Names() []string
+	Width() int
+}
+
+type BuiltinTemplates struct{}
+
+func (BuiltinTemplates) Find(name string) (template, bool) { return findTemplate(name) }
+func (BuiltinTemplates) List() []template                  { return templateList() }
+func (BuiltinTemplates) Names() []string                   { return templateNames() }
+func (BuiltinTemplates) Width() int                        { return templateWidth() }
+
 var helpMD = buildHelpMD()
 
 type tplCache struct {
@@ -126,7 +140,7 @@ Authorization: Bearer {{auth.token}}
 
 ### Capture value from response
 # @name CaptureToken
-# @capture file-secret auth.token {{response.json.uuid}}
+# @capture file-secret auth.token = response.json.uuid
 GET {{base.url}}/uuid
 
 ### Reuse captured value

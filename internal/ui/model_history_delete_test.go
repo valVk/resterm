@@ -8,11 +8,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/unkn0wn-root/resterm/internal/history"
+	histdb "github.com/unkn0wn-root/resterm/internal/history/sqlite"
 )
 
 func TestDeleteHistoryEntryRemovesFromStore(t *testing.T) {
 	dir := t.TempDir()
-	store := history.NewStore(filepath.Join(dir, "history.json"), 10)
+	store := histdb.New(filepath.Join(dir, "history.db"))
 	if err := store.Load(); err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -42,7 +43,10 @@ func TestDeleteHistoryEntryRemovesFromStore(t *testing.T) {
 	updated, _ := model.Update(msg)
 	model = updated.(Model)
 
-	entries := store.Entries()
+	entries, err := store.Entries()
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
 	if len(entries) != 0 {
 		t.Fatalf("expected store to be empty, got %d entries", len(entries))
 	}

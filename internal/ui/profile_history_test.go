@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/unkn0wn-root/resterm/internal/analysis"
-	"github.com/unkn0wn-root/resterm/internal/history"
+	histdb "github.com/unkn0wn-root/resterm/internal/history/sqlite"
 	"github.com/unkn0wn-root/resterm/internal/httpclient"
 	"github.com/unkn0wn-root/resterm/internal/restfile"
 )
@@ -61,7 +61,7 @@ func TestBuildProfileResults(t *testing.T) {
 
 func TestRecordProfileHistoryStoresEntry(t *testing.T) {
 	dir := t.TempDir()
-	store := history.NewStore(filepath.Join(dir, "history.json"), 10)
+	store := histdb.New(filepath.Join(dir, "history.db"))
 	model := New(Config{History: store})
 	req := &restfile.Request{
 		Method: "GET",
@@ -87,7 +87,10 @@ func TestRecordProfileHistoryStoresEntry(t *testing.T) {
 
 	model.recordProfileHistory(st, stats, msg, report)
 
-	entries := store.Entries()
+	entries, err := store.Entries()
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 history entry, got %d", len(entries))
 	}
@@ -123,7 +126,7 @@ func TestRecordProfileHistoryStoresEntry(t *testing.T) {
 
 func TestRecordProfileHistorySkipsNoLog(t *testing.T) {
 	dir := t.TempDir()
-	store := history.NewStore(filepath.Join(dir, "history.json"), 10)
+	store := histdb.New(filepath.Join(dir, "history.db"))
 	model := New(Config{History: store})
 	req := &restfile.Request{
 		Method: "GET",
@@ -136,7 +139,11 @@ func TestRecordProfileHistorySkipsNoLog(t *testing.T) {
 	stats := analysis.ComputeLatencyStats(st.successes, []int{}, 1)
 	msg := responseMsg{response: &httpclient.Response{Status: "200 OK", StatusCode: 200}}
 	model.recordProfileHistory(st, stats, msg, "")
-	if entries := store.Entries(); len(entries) != 0 {
+	entries, err := store.Entries()
+	if err != nil {
+		t.Fatalf("entries: %v", err)
+	}
+	if len(entries) != 0 {
 		t.Fatalf("expected no history entries when no-log set, got %d", len(entries))
 	}
 }

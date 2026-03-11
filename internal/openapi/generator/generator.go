@@ -11,15 +11,14 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/getkin/kin-openapi/openapi3"
-
 	"github.com/unkn0wn-root/resterm/internal/openapi"
 	"github.com/unkn0wn-root/resterm/internal/openapi/model"
 	"github.com/unkn0wn-root/resterm/internal/restfile"
+	"github.com/unkn0wn-root/resterm/internal/util"
 )
 
 type Builder struct {
-	example  *ExampleBuilder
+	samples  *schemaSampler
 	globals  map[string]restfile.Variable
 	warnings []string
 }
@@ -40,10 +39,13 @@ const (
 	placeholderPassword     = "replace-with-password"
 	placeholderToken        = "replace-with-token"
 	placeholderAPIKey       = "replace-with-api-key"
+
+	defaultAPIKeyHeaderName = "X-API-Key"
+	jsonContentType         = "application/json"
 )
 
 func NewBuilder() *Builder {
-	return &Builder{example: NewExampleBuilder(), globals: make(map[string]restfile.Variable)}
+	return &Builder{samples: newSchemaSampler(), globals: make(map[string]restfile.Variable)}
 }
 
 func (b *Builder) Generate(
@@ -174,7 +176,7 @@ type requestBuilder struct {
 type paramBinding struct {
 	Param           model.Parameter
 	VarName         string
-	Style           string
+	Style           pSty
 	Explode         bool
 	Kind            schemaKind
 	SerializedValue string
@@ -222,7 +224,7 @@ func (rb *requestBuilder) buildMetadata() restfile.RequestMetadata {
 		meta.Description = desc
 	}
 	if len(rb.op.Tags) > 0 {
-		meta.Tags = cloneStrings(rb.op.Tags)
+		meta.Tags = model.CloneStrs(rb.op.Tags)
 	}
 	return meta
 }
@@ -250,7 +252,7 @@ func (rb *requestBuilder) processParameters() {
 }
 
 func (rb *requestBuilder) buildParamBinding(param model.Parameter, varName string) paramBinding {
-	style := normalizeParamStyle(param)
+	style := normPSty(param)
 	explode := resolveParamExplode(param, style)
 	kind := rb.inferSchemaKind(param)
 	sample := rb.parameterSample(param, kind)
@@ -266,24 +268,15 @@ func (rb *requestBuilder) buildParamBinding(param model.Parameter, varName strin
 }
 
 func (rb *requestBuilder) inferSchemaKind(param model.Parameter) schemaKind {
-	schema := parameterSchema(param)
-	if schema == nil {
+	sch := parameterSchema(param)
+	typeInfo := model.InferSchemaType(sch, "")
+	if typeInfo.PrimaryType == "" {
 		return schemaPrimitive
 	}
-	types := schema.Type.Slice()
-	if len(types) == 0 {
-		if schema.Items != nil {
-			return schemaArray
-		}
-		if len(schema.Properties) > 0 || schema.AdditionalProperties.Schema != nil {
-			return schemaObject
-		}
-		return schemaPrimitive
-	}
-	switch strings.ToLower(types[0]) {
-	case "array":
+	switch typeInfo.PrimaryType {
+	case model.TypeArray:
 		return schemaArray
-	case "object":
+	case model.TypeObject:
 		return schemaObject
 	default:
 		return schemaPrimitive
@@ -295,13 +288,13 @@ func (rb *requestBuilder) parameterSample(param model.Parameter, kind schemaKind
 		return param.Example.Value
 	}
 	if param.Schema != nil {
-		if value, ok := rb.builder.example.FromSchema(param.Schema); ok {
+		if value, ok := rb.builder.samples.FromSchema(param.Schema); ok {
 			return value
 		}
 	}
 	switch kind {
 	case schemaArray:
-		return []any{"sample"}
+		return []any{defaultSampleValue}
 	case schemaObject:
 		return map[string]any{"example": "value"}
 	default:
@@ -316,7 +309,7 @@ func (rb *requestBuilder) parameterSample(param model.Parameter, kind schemaKind
 func (rb *requestBuilder) serializeParamValue(
 	param model.Parameter,
 	kind schemaKind,
-	style string,
+	style pSty,
 	explode bool,
 	sample any,
 ) string {
@@ -324,43 +317,31 @@ func (rb *requestBuilder) serializeParamValue(
 	case schemaArray:
 		values := ensureStringSlice(sample)
 		if len(values) == 0 {
-			values = []string{"sample"}
+			values = []string{defaultSampleValue}
 		}
 		switch style {
-		case "spaceDelimited":
+		case pStySpaceDel:
 			return strings.Join(values, " ")
-		case "pipeDelimited":
+		case pStyPipeDel:
 			return strings.Join(values, "|")
-		case "form":
-			if explode {
-				return joinNameValuePairs(param.Name, values, "&")
-			}
-			return strings.Join(values, ",")
-		default:
-			if explode {
-				return joinNameValuePairs(param.Name, values, "&")
-			}
-			return strings.Join(values, ",")
 		}
+		if explode {
+			return joinNameValuePairs(param.Name, values, "&")
+		}
+		return strings.Join(values, ",")
 	case schemaObject:
 		fields := ensureStringMap(sample)
 		if len(fields) == 0 {
 			fields = map[string]string{"example": "value"}
 		}
 		switch style {
-		case "deepobject":
+		case pStyDeepObj:
 			return joinDeepObject(param.Name, fields)
-		case "form":
-			if explode {
-				return joinObjectExplode(fields, "&")
-			}
-			return joinObjectKeyValueList(fields, ",")
-		default:
-			if explode {
-				return joinObjectExplode(fields, "&")
-			}
-			return joinObjectKeyValueList(fields, ",")
 		}
+		if explode {
+			return joinObjectExplode(fields, "&")
+		}
+		return joinObjectKeyValueList(fields, ",")
 	default:
 		switch v := sample.(type) {
 		case nil:
@@ -368,7 +349,7 @@ func (rb *requestBuilder) serializeParamValue(
 		case string:
 			return v
 		default:
-			return stringifyExample(sample, false)
+			return stringifySample(sample, false)
 		}
 	}
 }
@@ -387,7 +368,7 @@ func (rb *requestBuilder) composeURL() string {
 	path := rb.op.Path
 	for _, binding := range rb.pathParams {
 		placeholder := fmt.Sprintf("{%s}", binding.Param.Name)
-		replacement := fmt.Sprintf("{{%s}}", binding.VarName)
+		replacement := varRef(binding.VarName)
 		path = strings.ReplaceAll(path, placeholder, replacement)
 	}
 
@@ -401,7 +382,7 @@ func (rb *requestBuilder) composeURL() string {
 
 	switch {
 	case useGlobal:
-		url := joinBaseAndPath(fmt.Sprintf("{{%s}}", rb.baseVarName), path)
+		url := joinBaseAndPath(varRef(rb.baseVarName), path)
 		if operationBase != "" && operationBase != rb.globalBase {
 			rb.variables = append(rb.variables, restfile.Variable{
 				Name:  rb.baseVarName,
@@ -419,7 +400,7 @@ func (rb *requestBuilder) composeURL() string {
 
 func (rb *requestBuilder) applyHeaderParameters() {
 	for _, binding := range rb.headerParams {
-		value := fmt.Sprintf("{{%s}}", binding.VarName)
+		value := varRef(binding.VarName)
 		rb.headers.Add(binding.Param.Name, value)
 	}
 }
@@ -430,7 +411,7 @@ func (rb *requestBuilder) applyCookieParameters() {
 	}
 	parts := make([]string, 0, len(rb.cookieParams))
 	for _, binding := range rb.cookieParams {
-		parts = append(parts, fmt.Sprintf("%s={{%s}}", binding.Param.Name, binding.VarName))
+		parts = append(parts, fmt.Sprintf("%s=%s", binding.Param.Name, varRef(binding.VarName)))
 	}
 	rb.headers.Add("Cookie", strings.Join(parts, "; "))
 }
@@ -446,12 +427,12 @@ func (rb *requestBuilder) applyRequestBody(req *restfile.Request) {
 		return
 	}
 
-	content, ok := rb.resolveMediaExample(media)
+	content, ok := rb.resolveMediaSample(media)
 	if !ok {
 		return
 	}
 
-	text := stringifyExample(content, true)
+	text := stringifySample(content, true)
 	if !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
@@ -506,18 +487,18 @@ func (rb *requestBuilder) mapSecurity(req model.SecurityRequirement) *restfile.A
 	switch scheme.Type {
 	case model.SecurityHTTP:
 		switch scheme.Subtype {
-		case "basic":
+		case authTypeBasic:
 			rb.builder.registerGlobal(globalAuthUsernameVar, "user", false)
 			rb.builder.registerGlobal(globalAuthPasswordVar, "pass", true)
-			return &restfile.AuthSpec{Type: "basic", Params: map[string]string{
-				"username": fmt.Sprintf("{{%s}}", globalAuthUsernameVar),
-				"password": fmt.Sprintf("{{%s}}", globalAuthPasswordVar),
+			return &restfile.AuthSpec{Type: authTypeBasic, Params: map[string]string{
+				"username": varRef(globalAuthUsernameVar),
+				"password": varRef(globalAuthPasswordVar),
 			}}
-		case "bearer":
+		case authTypeBearer:
 			rb.builder.registerGlobal(globalAuthTokenVar, placeholderToken, true)
 			return &restfile.AuthSpec{
-				Type:   "bearer",
-				Params: map[string]string{"token": fmt.Sprintf("{{%s}}", globalAuthTokenVar)},
+				Type:   authTypeBearer,
+				Params: map[string]string{"token": varRef(globalAuthTokenVar)},
 			}
 		}
 	case model.SecurityAPIKey:
@@ -525,16 +506,16 @@ func (rb *requestBuilder) mapSecurity(req model.SecurityRequirement) *restfile.A
 		params := map[string]string{
 			"placement": placement,
 			"name":      scheme.Name,
-			"value":     fmt.Sprintf("{{%s}}", globalAuthAPIKeyVar),
+			"value":     varRef(globalAuthAPIKeyVar),
 		}
 		if placement == "" {
 			params["placement"] = "header"
 		}
 		if params["name"] == "" {
-			params["name"] = "X-API-Key"
+			params["name"] = defaultAPIKeyHeaderName
 		}
 		rb.builder.registerGlobal(globalAuthAPIKeyVar, placeholderAPIKey, true)
-		return &restfile.AuthSpec{Type: "apikey", Params: params}
+		return &restfile.AuthSpec{Type: authTypeAPIKey, Params: params}
 	case model.SecurityOAuth2:
 		return rb.buildOAuthAuthSpec(scheme, req)
 	}
@@ -560,87 +541,57 @@ func (rb *requestBuilder) buildOAuthAuthSpec(
 		return nil
 	}
 
-	scopes := cloneStrings(requirement.Scopes)
+	scopes := model.CloneStrs(requirement.Scopes)
 	if len(scopes) == 0 {
-		scopes = cloneStrings(flow.Scopes)
+		scopes = model.CloneStrs(flow.Scopes)
 	}
 
 	switch flow.Type {
 	case model.OAuthFlowClientCredentials:
-		tokenURL := strings.TrimSpace(flow.TokenURL)
-		if tokenURL == "" {
-			rb.builder.noteWarning(
-				fmt.Sprintf(
-					"request %s uses oauth2 client credentials flow without token_url",
-					rb.requestName(),
-				),
-			)
+		params, ok := rb.oauthBaseParams(
+			flow.TokenURL,
+			openapi.OAuthGrantClientCredentials,
+			"client credentials",
+		)
+		if !ok {
 			return nil
 		}
-		params := map[string]string{
-			openapi.OAuthParamTokenURL:     tokenURL,
-			openapi.OAuthParamClientID:     fmt.Sprintf("{{%s}}", globalOAuthClientIDVar),
-			openapi.OAuthParamClientSecret: fmt.Sprintf("{{%s}}", globalOAuthClientSecretVar),
-			openapi.OAuthParamClientAuth:   "basic",
-			openapi.OAuthParamGrant:        openapi.OAuthGrantClientCredentials,
-		}
-		if len(scopes) > 0 {
-			params[openapi.OAuthParamScope] = strings.Join(scopes, " ")
-		}
-		rb.registerOAuthCommonGlobals(params)
-		return &restfile.AuthSpec{Type: "oauth2", Params: params}
+		rb.finalizeOAuthParams(params, scopes)
+		return &restfile.AuthSpec{Type: authTypeOAuth2, Params: params}
 	case model.OAuthFlowPassword:
-		tokenURL := strings.TrimSpace(flow.TokenURL)
-		if tokenURL == "" {
-			rb.builder.noteWarning(
-				fmt.Sprintf(
-					"request %s uses oauth2 password flow without token_url",
-					rb.requestName(),
-				),
-			)
+		params, ok := rb.oauthBaseParams(flow.TokenURL, openapi.OAuthGrantPassword, "password")
+		if !ok {
 			return nil
 		}
-		params := map[string]string{
-			openapi.OAuthParamTokenURL:     tokenURL,
-			openapi.OAuthParamClientID:     fmt.Sprintf("{{%s}}", globalOAuthClientIDVar),
-			openapi.OAuthParamClientSecret: fmt.Sprintf("{{%s}}", globalOAuthClientSecretVar),
-			openapi.OAuthParamClientAuth:   "basic",
-			openapi.OAuthParamGrant:        openapi.OAuthGrantPassword,
-			openapi.OAuthParamUsername:     fmt.Sprintf("{{%s}}", globalOAuthUsernameVar),
-			openapi.OAuthParamPassword:     fmt.Sprintf("{{%s}}", globalOAuthPasswordVar),
-		}
-		if len(scopes) > 0 {
-			params[openapi.OAuthParamScope] = strings.Join(scopes, " ")
-		}
+		params[openapi.OAuthParamUsername] = varRef(globalOAuthUsernameVar)
+		params[openapi.OAuthParamPassword] = varRef(globalOAuthPasswordVar)
 		rb.builder.registerGlobal(globalOAuthUsernameVar, "user@example.com", false)
 		rb.builder.registerGlobal(globalOAuthPasswordVar, placeholderPassword, true)
-		rb.registerOAuthCommonGlobals(params)
-		return &restfile.AuthSpec{Type: "oauth2", Params: params}
+		rb.finalizeOAuthParams(params, scopes)
+		return &restfile.AuthSpec{Type: authTypeOAuth2, Params: params}
 	case model.OAuthFlowAuthorizationCode:
-		tokenURL := strings.TrimSpace(flow.TokenURL)
 		authURL := strings.TrimSpace(flow.AuthorizationURL)
-		if tokenURL == "" || authURL == "" {
+		if authURL == "" {
 			rb.builder.noteWarning(
 				fmt.Sprintf(
-					"request %s uses oauth2 authorization_code flow without auth/token urls",
+					"request %s uses oauth2 authorization_code flow without auth_url",
 					rb.requestName(),
 				),
 			)
 			return nil
 		}
-		params := map[string]string{
-			openapi.OAuthParamTokenURL:     tokenURL,
-			openapi.OAuthParamAuthURL:      authURL,
-			openapi.OAuthParamClientID:     fmt.Sprintf("{{%s}}", globalOAuthClientIDVar),
-			openapi.OAuthParamClientSecret: fmt.Sprintf("{{%s}}", globalOAuthClientSecretVar),
-			openapi.OAuthParamGrant:        openapi.OAuthGrantAuthorizationCode,
-			openapi.OAuthParamCodeMethod:   "s256",
+		params, ok := rb.oauthBaseParams(
+			flow.TokenURL,
+			openapi.OAuthGrantAuthorizationCode,
+			"authorization_code",
+		)
+		if !ok {
+			return nil
 		}
-		if len(scopes) > 0 {
-			params[openapi.OAuthParamScope] = strings.Join(scopes, " ")
-		}
-		rb.registerOAuthCommonGlobals(params)
-		return &restfile.AuthSpec{Type: "oauth2", Params: params}
+		params[openapi.OAuthParamAuthURL] = authURL
+		params[openapi.OAuthParamCodeMethod] = "s256"
+		rb.finalizeOAuthParams(params, scopes)
+		return &restfile.AuthSpec{Type: authTypeOAuth2, Params: params}
 	case model.OAuthFlowImplicit:
 		rb.builder.registerGlobal(globalAuthTokenVar, placeholderToken, true)
 		rb.builder.noteWarning(
@@ -651,8 +602,8 @@ func (rb *requestBuilder) buildOAuthAuthSpec(
 			),
 		)
 		return &restfile.AuthSpec{
-			Type:   "bearer",
-			Params: map[string]string{"token": fmt.Sprintf("{{%s}}", globalAuthTokenVar)},
+			Type:   authTypeBearer,
+			Params: map[string]string{"token": varRef(globalAuthTokenVar)},
 		}
 	default:
 		rb.builder.noteWarning(
@@ -660,6 +611,31 @@ func (rb *requestBuilder) buildOAuthAuthSpec(
 		)
 		return nil
 	}
+}
+
+func (rb *requestBuilder) oauthBaseParams(tok, grant, fl string) (map[string]string, bool) {
+	tok = strings.TrimSpace(tok)
+	if tok == "" {
+		rb.builder.noteWarning(
+			fmt.Sprintf("request %s uses oauth2 %s flow without token_url", rb.requestName(), fl),
+		)
+		return nil, false
+	}
+	ps := map[string]string{
+		openapi.OAuthParamTokenURL:     tok,
+		openapi.OAuthParamClientID:     varRef(globalOAuthClientIDVar),
+		openapi.OAuthParamClientSecret: varRef(globalOAuthClientSecretVar),
+		openapi.OAuthParamClientAuth:   authTypeBasic,
+		openapi.OAuthParamGrant:        grant,
+	}
+	return ps, true
+}
+
+func (rb *requestBuilder) finalizeOAuthParams(ps map[string]string, sc []string) {
+	if len(sc) > 0 {
+		ps[openapi.OAuthParamScope] = strings.Join(sc, " ")
+	}
+	rb.registerOAuthCommonGlobals(ps)
 }
 
 func (rb *requestBuilder) requestName() string {
@@ -686,50 +662,60 @@ func (rb *requestBuilder) uniqueVariableName(location model.ParameterLocation, n
 	return fmt.Sprintf("%s_%d", base, count+1)
 }
 
-func (rb *requestBuilder) resolveMediaExample(media *model.MediaType) (any, bool) {
+func (rb *requestBuilder) resolveMediaSample(media *model.MediaType) (any, bool) {
 	if media.Example.HasValue {
 		return media.Example.Value, true
 	}
 	if media.Schema != nil {
-		return rb.builder.example.FromSchema(media.Schema)
+		return rb.builder.samples.FromSchema(media.Schema)
 	}
 	return nil, false
 }
 
-func normalizeParamStyle(param model.Parameter) string {
-	style := strings.ToLower(strings.TrimSpace(param.Style))
+func normPSty(param model.Parameter) pSty {
+	style := styleNorm(param.Style)
 	if style != "" {
-		return style
+		return parsePSty(style)
 	}
 	switch param.Location {
 	case model.InQuery, model.InCookie:
-		return "form"
+		return pStyForm
 	case model.InPath, model.InHeader:
-		return "simple"
+		return pStySimple
 	default:
-		return "form"
+		return pStyForm
 	}
 }
 
-func resolveParamExplode(param model.Parameter, style string) bool {
+func resolveParamExplode(param model.Parameter, style pSty) bool {
 	if param.Explode != nil {
 		return *param.Explode
 	}
-	return style == "form"
+	return style == pStyForm
 }
 
-func parameterSchema(param model.Parameter) *openapi3.Schema {
+func parsePSty(style string) pSty {
+	switch style {
+	case model.StyleForm:
+		return pStyForm
+	case model.StyleSimple:
+		return pStySimple
+	case styleDeepObjectTok:
+		return pStyDeepObj
+	case styleSpaceDelimitedTok:
+		return pStySpaceDel
+	case stylePipeDelimitedTok:
+		return pStyPipeDel
+	default:
+		return pStyUnk
+	}
+}
+
+func parameterSchema(param model.Parameter) *model.Schema {
 	if param.Schema == nil {
 		return nil
 	}
-	ref, ok := param.Schema.Payload.(*openapi3.SchemaRef)
-	if !ok || ref == nil {
-		return nil
-	}
-	if ref.Value != nil {
-		return ref.Value
-	}
-	return nil
+	return param.Schema.Node
 }
 
 func ensureStringSlice(value any) []string {
@@ -788,7 +774,7 @@ func joinObjectExplode(fields map[string]string, sep string) string {
 		return ""
 	}
 
-	keys := sortedFieldKeys(fields)
+	keys := util.SortedKeys(fields)
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
 		parts = append(parts, fmt.Sprintf("%s=%s", key, strings.TrimSpace(fields[key])))
@@ -801,7 +787,7 @@ func joinObjectKeyValueList(fields map[string]string, sep string) string {
 		return ""
 	}
 
-	keys := sortedFieldKeys(fields)
+	keys := util.SortedKeys(fields)
 	parts := make([]string, 0, len(keys)*2)
 	for _, key := range keys {
 		parts = append(parts, key, strings.TrimSpace(fields[key]))
@@ -812,24 +798,15 @@ func joinObjectKeyValueList(fields map[string]string, sep string) string {
 func joinDeepObject(name string, fields map[string]string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		name = "object"
+		name = string(model.TypeObject)
 	}
 
-	keys := sortedFieldKeys(fields)
+	keys := util.SortedKeys(fields)
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
 		parts = append(parts, fmt.Sprintf("%s[%s]=%s", name, key, strings.TrimSpace(fields[key])))
 	}
 	return strings.Join(parts, "&")
-}
-
-func sortedFieldKeys(fields map[string]string) []string {
-	keys := make([]string, 0, len(fields))
-	for key := range fields {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func selectBaseURL(spec *model.Spec, preferred int) string {
@@ -875,9 +852,9 @@ func selectRequestMedia(media []model.MediaType) *model.MediaType {
 	if len(media) == 0 {
 		return nil
 	}
-	for _, mt := range media {
-		if strings.EqualFold(mt.ContentType, "application/json") {
-			return &mt
+	for i := range media {
+		if strings.EqualFold(media[i].ContentType, jsonContentType) {
+			return &media[i]
 		}
 	}
 	return &media[0]
@@ -896,7 +873,7 @@ func selectResponseContentType(responses []model.Response) (string, bool) {
 		statusScore := responseStatusScore(resp.StatusCode)
 		for _, mt := range resp.MediaTypes {
 			score := statusScore
-			if strings.EqualFold(mt.ContentType, "application/json") {
+			if strings.EqualFold(mt.ContentType, jsonContentType) {
 				score += 10
 			}
 			if score > bestScore {
@@ -950,26 +927,30 @@ func serializeQueryBinding(binding paramBinding) []string {
 	if name == "" {
 		name = "param"
 	}
-	style := strings.ToLower(strings.TrimSpace(binding.Style))
+	style := binding.Style
 	switch binding.Kind {
 	case schemaArray:
-		if style == "form" && binding.Explode {
-			return []string{fmt.Sprintf("{{%s}}", binding.VarName)}
+		if style == pStyForm && binding.Explode {
+			return []string{varRef(binding.VarName)}
 		}
-		return []string{fmt.Sprintf("%s={{%s}}", name, binding.VarName)}
+		return []string{fmt.Sprintf("%s=%s", name, varRef(binding.VarName))}
 	case schemaObject:
 		switch style {
-		case "deepobject":
-			return []string{fmt.Sprintf("{{%s}}", binding.VarName)}
-		case "form":
+		case pStyDeepObj:
+			return []string{varRef(binding.VarName)}
+		case pStyForm:
 			if binding.Explode {
-				return []string{fmt.Sprintf("{{%s}}", binding.VarName)}
+				return []string{varRef(binding.VarName)}
 			}
 		}
-		return []string{fmt.Sprintf("%s={{%s}}", name, binding.VarName)}
+		return []string{fmt.Sprintf("%s=%s", name, varRef(binding.VarName))}
 	default:
-		return []string{fmt.Sprintf("%s={{%s}}", name, binding.VarName)}
+		return []string{fmt.Sprintf("%s=%s", name, varRef(binding.VarName))}
 	}
+}
+
+func styleNorm(style string) string {
+	return strings.ToLower(strings.TrimSpace(style))
 }
 
 func joinBaseAndPath(base, path string) string {
@@ -1068,7 +1049,7 @@ func sanitizeVariableName(location model.ParameterLocation, name string) string 
 	return sanitized
 }
 
-func stringifyExample(value any, pretty bool) string {
+func stringifySample(value any, pretty bool) string {
 	switch v := value.(type) {
 	case nil:
 		return ""
@@ -1100,25 +1081,8 @@ func stringifyExample(value any, pretty bool) string {
 }
 
 func defaultParameterValue(param model.Parameter) string {
-	switch param.Location {
-	case model.InPath:
-		return "sample"
-	case model.InQuery:
-		return ""
-	case model.InHeader:
-		return ""
-	case model.InCookie:
-		return ""
-	default:
-		return ""
+	if param.Location == model.InPath {
+		return defaultSampleValue
 	}
-}
-
-func cloneStrings(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make([]string, len(values))
-	copy(out, values)
-	return out
+	return ""
 }

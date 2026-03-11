@@ -22,7 +22,7 @@ import (
 	"github.com/unkn0wn-root/resterm/internal/config"
 	curl "github.com/unkn0wn-root/resterm/internal/curl/importer"
 	"github.com/unkn0wn-root/resterm/internal/grpcclient"
-	"github.com/unkn0wn-root/resterm/internal/history"
+	histdb "github.com/unkn0wn-root/resterm/internal/history/sqlite"
 	"github.com/unkn0wn-root/resterm/internal/httpclient"
 	"github.com/unkn0wn-root/resterm/internal/openapi"
 	"github.com/unkn0wn-root/resterm/internal/openapi/generator"
@@ -42,13 +42,49 @@ var (
 	date    = "unknown"
 )
 
+type cliExitErr struct {
+	err  error
+	code int
+}
+
+type exitCoder interface {
+	ExitCode() int
+}
+
+func (e cliExitErr) Error() string {
+	if e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e cliExitErr) Unwrap() error {
+	return e.err
+}
+
+func (e cliExitErr) ExitCode() int {
+	if e.code == 0 {
+		return 1
+	}
+	return e.code
+}
+
 func main() {
-	if handled, err := handleInitSubcommand(os.Args[1:]); handled {
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
+	if err := run(os.Args[1:]); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(exitCode(err))
+	}
+}
+
+func run(a []string) error {
+	if ok, err := handleCollectionSubcommand(a); ok {
+		return err
+	}
+	if ok, err := handleHistorySubcommand(a); ok {
+		return err
+	}
+	if ok, err := handleInitSubcommand(a); ok {
+		return err
 	}
 
 	var (
@@ -78,107 +114,115 @@ func main() {
 		compareBaseline          string
 	)
 
-	telemetryCfg := telemetry.ConfigFromEnv(os.Getenv)
-	traceOTEndpoint = telemetryCfg.Endpoint
-	traceOTInsecure = telemetryCfg.Insecure
-	traceOTService = telemetryCfg.ServiceName
+	tc := telemetry.ConfigFromEnv(os.Getenv)
+	traceOTEndpoint = tc.Endpoint
+	traceOTInsecure = tc.Insecure
+	traceOTService = tc.ServiceName
 
-	flag.StringVar(&filePath, "file", "", "Path to .http/.rest file to open")
-	flag.StringVar(&envName, "env", "", "Environment name to use")
-	flag.StringVar(&envFile, "env-file", "", "Path to environment file")
-	flag.StringVar(&workspace, "workspace", "", "Workspace directory to scan for request files")
-	flag.DurationVar(&timeout, "timeout", 30*time.Second, "Request timeout")
-	flag.BoolVar(&insecure, "insecure", false, "Skip TLS certificate verification")
-	flag.BoolVar(&follow, "follow", true, "Follow redirects")
-	flag.StringVar(&proxyURL, "proxy", "", "HTTP proxy URL")
-	flag.BoolVar(&recursive, "recursive", false, "Recursively scan workspace for request files")
-	flag.BoolVar(
+	fs := flag.NewFlagSet("resterm", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&filePath, "file", "", "Path to .http/.rest file to open")
+	fs.StringVar(&envName, "env", "", "Environment name to use")
+	fs.StringVar(&envFile, "env-file", "", "Path to environment file")
+	fs.StringVar(&workspace, "workspace", "", "Workspace directory to scan for request files")
+	fs.DurationVar(&timeout, "timeout", 30*time.Second, "Request timeout")
+	fs.BoolVar(&insecure, "insecure", false, "Skip TLS certificate verification")
+	fs.BoolVar(&follow, "follow", true, "Follow redirects")
+	fs.StringVar(&proxyURL, "proxy", "", "HTTP proxy URL")
+	fs.BoolVar(&recursive, "recursive", false, "Recursively scan workspace for request files")
+	fs.BoolVar(
 		&recursive,
 		"recurisve",
 		false,
 		"(deprecated) Recursively scan workspace for request files",
 	)
-	flag.BoolVar(&showVersion, "version", false, "Show resterm version")
-	flag.BoolVar(&checkUpdate, "check-update", false, "Check for newer releases and exit")
-	flag.BoolVar(
+	fs.BoolVar(&showVersion, "version", false, "Show resterm version")
+	fs.BoolVar(&checkUpdate, "check-update", false, "Check for newer releases and exit")
+	fs.BoolVar(
 		&doUpdate,
 		"update",
 		false,
 		"Download and install the latest release, if available",
 	)
-	flag.StringVar(
+	fs.StringVar(
 		&curlSrc,
 		"from-curl",
 		"",
 		"Curl command or file path to convert",
 	)
-	flag.StringVar(
+	fs.StringVar(
 		&openapiSpec,
 		"from-openapi",
 		"",
 		"Path to OpenAPI specification file to convert",
 	)
-	flag.StringVar(&httpOut, "http-out", "", "Destination path for generated .http file")
-	flag.StringVar(
+	fs.StringVar(&httpOut, "http-out", "", "Destination path for generated .http file")
+	fs.StringVar(
 		&openapiBase,
 		"openapi-base-var",
 		openapi.DefaultBaseURLVariable,
 		"Variable name for the generated base URL",
 	)
-	flag.BoolVar(
+	fs.BoolVar(
 		&openapiResolveRefs,
 		"openapi-resolve-refs",
 		false,
 		"Resolve external $ref references during OpenAPI import",
 	)
-	flag.BoolVar(
+	fs.BoolVar(
 		&openapiIncludeDeprecated,
 		"openapi-include-deprecated",
 		false,
 		"Include deprecated operations when generating requests",
 	)
-	flag.IntVar(
+	fs.IntVar(
 		&openapiServerIndex,
 		"openapi-server-index",
 		0,
 		"Preferred server index (0-based) from the spec to use as the base URL",
 	)
-	flag.StringVar(
+	fs.StringVar(
 		&traceOTEndpoint,
 		"trace-otel-endpoint",
 		traceOTEndpoint,
 		"OTLP collector endpoint used when @trace is enabled",
 	)
-	flag.BoolVar(
+	fs.BoolVar(
 		&traceOTInsecure,
 		"trace-otel-insecure",
 		traceOTInsecure,
 		"Disable TLS for OTLP trace export",
 	)
-	flag.StringVar(
+	fs.StringVar(
 		&traceOTService,
 		"trace-otel-service",
 		traceOTService,
 		"Override service.name resource attribute for exported spans",
 	)
-	flag.StringVar(
+	fs.StringVar(
 		&compareTargetsRaw,
 		"compare",
 		"",
 		"Default environments for manual compare runs (comma/space separated)",
 	)
-	flag.StringVar(
+	fs.StringVar(
 		&compareBaseline,
 		"compare-base",
 		"",
 		"Baseline environment when --compare is used (defaults to first target)",
 	)
-	flag.Parse()
+	if err := fs.Parse(a); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printMainUsage(os.Stderr, fs)
+			return nil
+		}
+		return cliExitErr{err: err, code: 2}
+	}
 
-	telemetryCfg.Endpoint = strings.TrimSpace(traceOTEndpoint)
-	telemetryCfg.Insecure = traceOTInsecure
-	telemetryCfg.ServiceName = strings.TrimSpace(traceOTService)
-	telemetryCfg.Version = version
+	tc.Endpoint = strings.TrimSpace(traceOTEndpoint)
+	tc.Insecure = traceOTInsecure
+	tc.ServiceName = strings.TrimSpace(traceOTService)
+	tc.Version = version
 
 	if showVersion {
 		fmt.Printf("resterm %s\n", version)
@@ -189,17 +233,26 @@ func main() {
 		} else {
 			fmt.Printf("  sha256: unavailable (%v)\n", err)
 		}
-		os.Exit(0)
+		return nil
+	}
+	if err := validateReservedEnvironment(envName, "--env"); err != nil {
+		return err
 	}
 
-	updateHTTP := &http.Client{Timeout: 60 * time.Second}
-	upClient, err := update.NewClient(updateHTTP, updateRepo)
+	hc := &http.Client{Timeout: 60 * time.Second}
+	uc, err := update.NewClient(hc, updateRepo)
 	if err != nil {
-		log.Fatalf("update client: %v", err)
+		return fmt.Errorf("update client: %w", err)
 	}
+
+	src := installSrc()
+	ucmd := updCmd(src)
 
 	if checkUpdate || doUpdate {
-		u := newCLIUpdater(upClient, version)
+		if doUpdate && src == srcBrew {
+			return errors.New(updBlock(ucmd))
+		}
+		u := newCLIUpdater(uc, version)
 		ctx := context.Background()
 		res, ok, err := u.check(ctx)
 		if err != nil {
@@ -209,19 +262,13 @@ func main() {
 					rtfmt.LogHandler(log.Printf, "update notice write failed: %v"),
 					"Update checks are disabled for dev builds.",
 				)
-				os.Exit(0)
+				return nil
 			}
-			_ = rtfmt.Fprintf(
-				os.Stderr,
-				"update check failed: %v\n",
-				rtfmt.LogHandler(log.Printf, "update check error write failed: %v"),
-				err,
-			)
-			os.Exit(1)
+			return fmt.Errorf("update check failed: %w", err)
 		}
 		if !ok {
 			u.printNoUpdate()
-			os.Exit(0)
+			return nil
 		}
 		u.printAvailable(res)
 		u.printChangelog(res)
@@ -229,42 +276,24 @@ func main() {
 			_ = rtfmt.Fprintln(
 				os.Stdout,
 				rtfmt.LogHandler(log.Printf, "update hint write failed: %v"),
-				"Run `resterm --update` to install.",
+				updHint(ucmd),
 			)
-			os.Exit(0)
+			return nil
 		}
-		_, err = u.apply(ctx, res)
-		if err != nil && !errors.Is(err, update.ErrPendingSwap) {
-			_ = rtfmt.Fprintf(
-				os.Stderr,
-				"update failed: %v\n",
-				rtfmt.LogHandler(log.Printf, "update failure write failed: %v"),
-				err,
-			)
-			os.Exit(1)
+		if _, err := u.apply(ctx, res); err != nil && !errors.Is(err, update.ErrPendingSwap) {
+			return fmt.Errorf("update failed: %w", err)
 		}
-		os.Exit(0)
+		return nil
 	}
 
 	if curlSrc != "" && openapiSpec != "" {
-		_ = rtfmt.Fprintf(
-			os.Stderr,
-			"import error: choose either --from-curl or --from-openapi\n",
-			nil,
-		)
-		os.Exit(1)
+		return errors.New("import error: choose either --from-curl or --from-openapi")
 	}
 
 	if curlSrc != "" {
 		cmd, err := readCurlCommand(curlSrc)
 		if err != nil {
-			_ = rtfmt.Fprintf(
-				os.Stderr,
-				"curl import error: %v\n",
-				nil,
-				err,
-			)
-			os.Exit(1)
+			return fmt.Errorf("curl import error: %w", err)
 		}
 
 		targetOut := httpOut
@@ -283,17 +312,11 @@ func main() {
 			targetOut,
 			version,
 			opts); err != nil {
-			_ = rtfmt.Fprintf(
-				os.Stderr,
-				"curl import error: %v\n",
-				nil,
-				err,
-			)
-			os.Exit(1)
+			return fmt.Errorf("curl import error: %w", err)
 		}
 
 		_ = rtfmt.Fprintf(os.Stdout, "Generated %s from curl\n", nil, targetOut)
-		os.Exit(0)
+		return nil
 	}
 
 	if openapiSpec != "" {
@@ -321,28 +344,22 @@ func main() {
 			targetOut,
 			version,
 			opts); err != nil {
-			_ = rtfmt.Fprintf(
-				os.Stderr,
-				"openapi import error: %v\n",
-				nil,
-				err,
-			)
-			os.Exit(1)
+			return fmt.Errorf("openapi import error: %w", err)
 		}
 
 		_ = rtfmt.Fprintf(os.Stdout, "Generated %s from %s\n", nil, targetOut, openapiSpec)
-		os.Exit(0)
+		return nil
 	}
 
-	if filePath == "" && flag.NArg() > 0 {
-		filePath = flag.Arg(0)
+	if filePath == "" && fs.NArg() > 0 {
+		filePath = fs.Arg(0)
 	}
 
 	var initialContent string
 	if filePath != "" {
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			log.Fatalf("read file: %v", err)
+			return fmt.Errorf("read file: %w", err)
 		}
 
 		filePath = filepath.Clean(filePath)
@@ -377,9 +394,9 @@ func main() {
 
 	client := httpclient.NewClient(nil)
 
-	provider, err := telemetry.New(telemetryCfg)
+	provider, err := telemetry.New(tc)
 	if err != nil {
-		if telemetryCfg.Enabled() {
+		if tc.Enabled() {
 			log.Printf("telemetry init error: %v", err)
 		}
 	} else {
@@ -408,16 +425,39 @@ func main() {
 		DefaultPlaintextSet: true,
 	}
 
-	historyStore := history.NewStore(config.HistoryPath(), 500)
+	historyStore := histdb.New(config.HistoryPath())
+	// History failures should never block the UI startup path.
+	// We log issues and keep running with an empty in-memory view.
 	if err := historyStore.Load(); err != nil {
 		log.Printf("history load error: %v", err)
+	} else if rec := historyStore.RecoveryInfo(); rec != nil {
+		log.Printf("history db recovered: %s -> %s", rec.Path, rec.Backup)
 	}
+	// Migration is also best effort at startup so existing workflows
+	// can continue even when legacy files are malformed.
+	if n, err := historyStore.MigrateJSON(config.LegacyHistoryPath()); err != nil {
+		log.Printf("history migration error: %v", err)
+	} else if n > 0 {
+		log.Printf(
+			"history migration imported %d entries from %s",
+			n,
+			config.LegacyHistoryPath(),
+		)
+	}
+	defer func() {
+		if err := historyStore.Close(); err != nil {
+			log.Printf("history close error: %v", err)
+		}
+	}()
 
 	compareTargets, compareErr := parseCompareTargets(compareTargetsRaw)
 	if compareErr != nil {
-		log.Printf("invalid --compare value: %v", compareErr)
+		return fmt.Errorf("invalid --compare value: %w", compareErr)
 	}
 	compareBaseline = strings.TrimSpace(compareBaseline)
+	if err := validateReservedEnvironment(compareBaseline, "--compare-base"); err != nil {
+		return fmt.Errorf("invalid --compare-base value: %w", err)
+	}
 
 	settings, settingsHandle, err := config.LoadSettings()
 	if err != nil {
@@ -483,8 +523,9 @@ func main() {
 		WorkspaceRoot:       workspace,
 		Recursive:           recursive,
 		Version:             version,
-		UpdateClient:        upClient,
+		UpdateClient:        uc,
 		EnableUpdate:        updateEnabled,
+		UpdateCmd:           ucmd,
 		CompareTargets:      compareTargets,
 		CompareBase:         compareBaseline,
 		Bindings:            bindingMap,
@@ -495,10 +536,33 @@ func main() {
 
 	program := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := program.Run(); err != nil {
-		handler := rtfmt.LogHandler(log.Printf, "program.Run() write failed: %v")
-		_ = rtfmt.Fprintf(os.Stderr, "error: %v\n", handler, err)
-		os.Exit(1)
+		return fmt.Errorf("error: %w", err)
 	}
+	return nil
+}
+
+func printMainUsage(w io.Writer, fs *flag.FlagSet) {
+	if _, err := fmt.Fprintf(w, "Usage: %s [flags] [file]\n\n", fs.Name()); err != nil {
+		return
+	}
+	if _, err := fmt.Fprintln(w, "Flags:"); err != nil {
+		return
+	}
+	out := fs.Output()
+	fs.SetOutput(w)
+	defer fs.SetOutput(out)
+	fs.PrintDefaults()
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ex exitCoder
+	if errors.As(err, &ex) {
+		return ex.ExitCode()
+	}
+	return 1
 }
 
 func loadEnvironment(
@@ -549,22 +613,32 @@ func parseCompareTargets(raw string) ([]string, error) {
 	seen := make(map[string]struct{}, len(fields))
 	targets := make([]string, 0, len(fields))
 	for _, field := range fields {
-		value := strings.TrimSpace(field)
-		if value == "" {
-			continue
+		if vars.IsReservedEnvironment(field) {
+			return nil, fmt.Errorf("environment %q is reserved for shared defaults", field)
 		}
-		lower := strings.ToLower(value)
+		lower := strings.ToLower(field)
 		if _, ok := seen[lower]; ok {
 			continue
 		}
 		seen[lower] = struct{}{}
-		targets = append(targets, value)
+		targets = append(targets, field)
 	}
 
 	if len(targets) < 2 {
 		return nil, fmt.Errorf("expected at least two environments, got %d", len(targets))
 	}
 	return targets, nil
+}
+
+func validateReservedEnvironment(value, flagName string) error {
+	if vars.IsReservedEnvironment(value) {
+		return fmt.Errorf(
+			"%s %q is reserved for shared defaults; choose a concrete environment",
+			flagName,
+			value,
+		)
+	}
+	return nil
 }
 
 func executableChecksum() (string, error) {

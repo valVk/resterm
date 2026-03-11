@@ -21,6 +21,7 @@ import (
 	"github.com/unkn0wn-root/resterm/internal/grpcclient"
 	"github.com/unkn0wn-root/resterm/internal/history"
 	"github.com/unkn0wn-root/resterm/internal/httpclient"
+	"github.com/unkn0wn-root/resterm/internal/k8s"
 	"github.com/unkn0wn-root/resterm/internal/oauth"
 	"github.com/unkn0wn-root/resterm/internal/parser"
 	"github.com/unkn0wn-root/resterm/internal/restfile"
@@ -152,12 +153,14 @@ type Config struct {
 	HTTPOptions         httpclient.Options
 	GRPCOptions         grpcclient.Options
 	SSHManager          *ssh.Manager
-	History             *history.Store
+	K8sManager          *k8s.Manager
+	History             history.Store
 	WorkspaceRoot       string
 	Recursive           bool
 	Version             string
 	UpdateClient        update.Client
 	EnableUpdate        bool
+	UpdateCmd           string
 	CompareTargets      []string
 	CompareBase         string
 	Bindings            *bindings.Map
@@ -179,7 +182,10 @@ type Model struct {
 	grpcClient         *grpcclient.Client
 	grpcOptions        grpcclient.Options
 	sshMgr             *ssh.Manager
-	sshGlobals         *sshStore
+	sshGlobals         *namedStore[restfile.SSHProfile]
+	k8sMgr             *k8s.Manager
+	k8sGlobals         *namedStore[restfile.K8sProfile]
+	patchGlobals       *patchStore
 	workspaceRoot      string
 	workspaceRecursive bool
 
@@ -282,6 +288,7 @@ type Model struct {
 	oauth           *oauth.Manager
 	updateClient    update.Client
 	updateVersion   string
+	updateCmd       string
 	updateEnabled   bool
 	updateBusy      bool
 	updateAnnounce  string
@@ -297,7 +304,7 @@ type Model struct {
 
 	activeThemeKey      string
 	settingsHandle      config.SettingsHandle
-	historyStore        *history.Store
+	historyStore        history.Store
 	historyEntries      []history.Entry
 	historyScopeCount   int
 	historySelectedID   string
@@ -516,9 +523,9 @@ func New(cfg Config) Model {
 	historyFilter.TextStyle = th.HeaderValue
 
 	primaryViewport := viewport.New(0, 0)
-	primaryViewport.SetContent(centerContent(noResponseMessage, 0, 0))
+	primaryViewport.SetContent(logoPlaceholder(0, 0))
 	secondaryViewport := viewport.New(0, 0)
-	secondaryViewport.SetContent(centerContent(noResponseMessage, 0, 0))
+	secondaryViewport.SetContent(logoPlaceholder(0, 0))
 
 	reqDelegate := listDelegateForTheme(th, true, 3)
 	requestList := list.New(nil, reqDelegate, 0, 0)
@@ -593,9 +600,19 @@ func New(cfg Config) Model {
 	if sshMgr == nil {
 		sshMgr = ssh.NewManager()
 	}
+	k8sMgr := cfg.K8sManager
+	if k8sMgr == nil {
+		k8sMgr = k8s.NewManager()
+	}
 	sshGlobals := newSSHStore()
+	k8sGlobals := newK8sStore()
+	patchGlobals := newPatchStore()
 
 	updateVersion := strings.TrimSpace(cfg.Version)
+	updateCmd := strings.TrimSpace(cfg.UpdateCmd)
+	if updateCmd == "" {
+		updateCmd = "resterm --update"
+	}
 	updateEnabled := cfg.EnableUpdate && updateVersion != "" && updateVersion != "dev" &&
 		cfg.UpdateClient.Ready()
 
@@ -609,6 +626,9 @@ func New(cfg Config) Model {
 		grpcOptions:            cfg.GRPCOptions,
 		sshMgr:                 sshMgr,
 		sshGlobals:             sshGlobals,
+		k8sMgr:                 k8sMgr,
+		k8sGlobals:             k8sGlobals,
+		patchGlobals:           patchGlobals,
 		workspaceRoot:          workspace,
 		workspaceRecursive:     cfg.Recursive,
 		fileList:               fileList,
@@ -661,6 +681,7 @@ func New(cfg Config) Model {
 		oauth:                    oauth.NewManager(client),
 		updateClient:             cfg.UpdateClient,
 		updateVersion:            updateVersion,
+		updateCmd:                updateCmd,
 		updateEnabled:            updateEnabled,
 		editorInsertMode:         false,
 		editorWriteKeyMap:        writeKeyMap,
@@ -695,7 +716,7 @@ func New(cfg Config) Model {
 	_ = model.setInsertMode(false, false)
 
 	model.doc = parser.Parse(cfg.FilePath, []byte(cfg.InitialContent))
-	model.syncSSHGlobals(model.doc)
+	model.syncAllGlobals(model.doc)
 	model.syncRequestList(model.doc)
 	model.rebuildNavigator(entries)
 	if model.historyStore != nil {

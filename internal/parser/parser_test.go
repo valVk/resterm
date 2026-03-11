@@ -8,6 +8,15 @@ import (
 	"github.com/unkn0wn-root/resterm/internal/restfile"
 )
 
+func hasParseMessage(list []restfile.ParseError, sub string) bool {
+	for _, e := range list {
+		if strings.Contains(e.Message, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestParseAuthAndSettings(t *testing.T) {
 	src := `# @name Sample
 # @auth bearer token-123
@@ -202,11 +211,101 @@ GET https://example.com
 	if spec.Expression != `{headers: {"X-Test": "1"}}` {
 		t.Fatalf("unexpected apply expression: %q", spec.Expression)
 	}
+	if len(spec.Uses) != 0 {
+		t.Fatalf("expected no apply uses, got %#v", spec.Uses)
+	}
 	if spec.Line != 1 {
 		t.Fatalf("expected line 1, got %d", spec.Line)
 	}
 	if spec.Col != 1 {
 		t.Fatalf("expected col 1, got %d", spec.Col)
+	}
+}
+
+func TestParseApplyUseChain(t *testing.T) {
+	src := `# @apply use=jsonApi,use=authProd,use=strict
+GET https://example.com
+`
+	doc := Parse("apply-use.http", []byte(src))
+	if len(doc.Errors) != 0 {
+		t.Fatalf("expected no parse errors, got %v", doc.Errors)
+	}
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	ap := doc.Requests[0].Metadata.Applies
+	if len(ap) != 1 {
+		t.Fatalf("expected 1 apply directive, got %d", len(ap))
+	}
+	sp := ap[0]
+	if sp.Expression != "" {
+		t.Fatalf("expected empty expression for use chain, got %q", sp.Expression)
+	}
+	want := []string{"jsonApi", "authProd", "strict"}
+	if len(sp.Uses) != len(want) {
+		t.Fatalf("unexpected apply uses: %#v", sp.Uses)
+	}
+	for i, v := range want {
+		if sp.Uses[i] != v {
+			t.Fatalf("expected use %q at index %d, got %q", v, i, sp.Uses[i])
+		}
+	}
+}
+
+func TestParseApplyUseInvalidToken(t *testing.T) {
+	src := `# @apply use=ok,bad=oops
+GET https://example.com
+`
+	doc := Parse("apply-use-bad.http", []byte(src))
+	if len(doc.Errors) == 0 {
+		t.Fatalf("expected parse errors")
+	}
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	if got := len(doc.Requests[0].Metadata.Applies); got != 0 {
+		t.Fatalf("expected 0 apply directives on error, got %d", got)
+	}
+}
+
+func TestParsePatchProfiles(t *testing.T) {
+	src := `# @patch file jsonApi {headers: {"Accept":"application/json"}}
+# @patch global strict {settings: {timeout:"3s"}}
+GET https://example.com
+`
+	doc := Parse("patch.http", []byte(src))
+	if len(doc.Errors) != 0 {
+		t.Fatalf("expected no parse errors, got %v", doc.Errors)
+	}
+	if len(doc.Patches) != 2 {
+		t.Fatalf("expected 2 patch profiles, got %d", len(doc.Patches))
+	}
+	if doc.Patches[0].Scope != restfile.PatchScopeFile {
+		t.Fatalf("expected first patch to be file scope, got %v", doc.Patches[0].Scope)
+	}
+	if doc.Patches[0].Name != "jsonApi" {
+		t.Fatalf("unexpected first patch name %q", doc.Patches[0].Name)
+	}
+	if doc.Patches[1].Scope != restfile.PatchScopeGlobal {
+		t.Fatalf("expected second patch to be global scope, got %v", doc.Patches[1].Scope)
+	}
+	if doc.Patches[1].Name != "strict" {
+		t.Fatalf("unexpected second patch name %q", doc.Patches[1].Name)
+	}
+}
+
+func TestParsePatchInsideRequestErrors(t *testing.T) {
+	src := `### sample
+# @name Sample
+# @patch file local {headers: {"X-Test":"1"}}
+GET https://example.com
+`
+	doc := Parse("patch-request.http", []byte(src))
+	if len(doc.Errors) == 0 {
+		t.Fatalf("expected parse errors")
+	}
+	if len(doc.Patches) != 0 {
+		t.Fatalf("expected no patch profiles when declared in request, got %d", len(doc.Patches))
 	}
 }
 
@@ -459,6 +558,27 @@ GET http://example.com
 	}
 }
 
+func TestParseSSHGlobalProfileAliases(t *testing.T) {
+	src := `# @ssh global edge host=10.0.0.5 user=ops pass=secret known-hosts=/tmp/kh strict-hostkey=false
+GET http://example.com
+`
+	doc := Parse("ssh_aliases.http", []byte(src))
+	if len(doc.SSH) != 1 {
+		t.Fatalf("expected 1 ssh profile, got %d", len(doc.SSH))
+	}
+
+	prof := doc.SSH[0]
+	if prof.Pass != "secret" {
+		t.Fatalf("unexpected pass %q", prof.Pass)
+	}
+	if prof.KnownHosts != "/tmp/kh" {
+		t.Fatalf("unexpected known-hosts %q", prof.KnownHosts)
+	}
+	if !prof.Strict.Set || prof.Strict.Val {
+		t.Fatalf("expected strict-hostkey=false to be set")
+	}
+}
+
 func TestParseSSHRequestUseOverride(t *testing.T) {
 	src := `### jump
 # @ssh use=edge host={{api_host}} strict_hostkey=false retries=3
@@ -509,6 +629,9 @@ GET http://example.com
 	if req.SSH.Inline.Persist.Set {
 		t.Fatalf("request persist should be ignored")
 	}
+	if !hasParseMessage(doc.Warnings, "@ssh request scope ignores persist") {
+		t.Fatalf("expected warning for ignored ssh persist, got %v", doc.Warnings)
+	}
 }
 
 func TestParseSSHWithGRPCRequest(t *testing.T) {
@@ -532,6 +655,326 @@ GRPC passthrough:///grpc-internal:8082
 	}
 	if req.SSH.Use != "jump" {
 		t.Fatalf("unexpected ssh use %q", req.SSH.Use)
+	}
+}
+
+func TestParseK8sGlobalProfile(t *testing.T) {
+	src := `# @k8s global cluster-api namespace=default pod=api-server port=8080 context=kind-dev kubeconfig=~/.kube/config local_port=18080 address=127.0.0.1 pod_running_timeout=30s retries=2 persist
+GET http://example.com
+`
+	doc := Parse("k8s.http", []byte(src))
+	if len(doc.K8s) != 1 {
+		t.Fatalf("expected 1 k8s profile, got %d", len(doc.K8s))
+	}
+
+	prof := doc.K8s[0]
+	if prof.Scope != restfile.K8sScopeGlobal {
+		t.Fatalf("expected global scope, got %v", prof.Scope)
+	}
+	if prof.Name != "cluster-api" {
+		t.Fatalf("expected profile name cluster-api, got %q", prof.Name)
+	}
+	if prof.Namespace != "default" {
+		t.Fatalf("unexpected namespace %q", prof.Namespace)
+	}
+	if prof.Target != "pod:api-server" {
+		t.Fatalf("unexpected target %q", prof.Target)
+	}
+	if prof.Pod != "api-server" {
+		t.Fatalf("unexpected pod %q", prof.Pod)
+	}
+	if prof.Port != 8080 || prof.PortStr != "8080" {
+		t.Fatalf("unexpected port %d (%q)", prof.Port, prof.PortStr)
+	}
+	if prof.Context != "kind-dev" {
+		t.Fatalf("unexpected context %q", prof.Context)
+	}
+	if prof.Kubeconfig != "~/.kube/config" {
+		t.Fatalf("unexpected kubeconfig %q", prof.Kubeconfig)
+	}
+	if prof.LocalPort != 18080 || prof.LocalPortStr != "18080" {
+		t.Fatalf("unexpected local port %d (%q)", prof.LocalPort, prof.LocalPortStr)
+	}
+	if prof.Address != "127.0.0.1" {
+		t.Fatalf("unexpected address %q", prof.Address)
+	}
+	if !prof.PodWait.Set || prof.PodWaitStr != "30s" {
+		t.Fatalf("expected pod_running_timeout to be captured")
+	}
+	if !prof.Retries.Set || prof.RetriesStr != "2" {
+		t.Fatalf("expected retries to be captured")
+	}
+	if !prof.Persist.Set || !prof.Persist.Val {
+		t.Fatalf("expected persist=true to be captured")
+	}
+}
+
+func TestParseK8sGlobalProfileAliases(t *testing.T) {
+	src := `# @k8s global cluster-api ns=default svc=api port=8080 kube-context=kind-dev config=~/.kube/config localport=18080 bind=127.0.0.1 podwait=30s retries=2 persist
+GET http://example.com
+`
+	doc := Parse("k8s_aliases.http", []byte(src))
+	if len(doc.K8s) != 1 {
+		t.Fatalf("expected 1 k8s profile, got %d", len(doc.K8s))
+	}
+
+	prof := doc.K8s[0]
+	if prof.Namespace != "default" {
+		t.Fatalf("unexpected namespace %q", prof.Namespace)
+	}
+	if prof.Target != "service:api" {
+		t.Fatalf("unexpected target %q", prof.Target)
+	}
+	if prof.Context != "kind-dev" {
+		t.Fatalf("unexpected context %q", prof.Context)
+	}
+	if prof.Kubeconfig != "~/.kube/config" {
+		t.Fatalf("unexpected kubeconfig %q", prof.Kubeconfig)
+	}
+	if prof.LocalPort != 18080 || prof.LocalPortStr != "18080" {
+		t.Fatalf("unexpected local port %d (%q)", prof.LocalPort, prof.LocalPortStr)
+	}
+	if prof.Address != "127.0.0.1" {
+		t.Fatalf("unexpected address %q", prof.Address)
+	}
+	if !prof.PodWait.Set || prof.PodWaitStr != "30s" {
+		t.Fatalf("expected podwait alias to be captured")
+	}
+}
+
+func TestParseK8sAliasValidationErrors(t *testing.T) {
+	localPortSrc := `### bad
+# @k8s pod=api port=8080 local-port=99999
+GET http://example.com
+`
+	doc := Parse("k8s_bad_local_port_alias.http", []byte(localPortSrc))
+	if !hasParseMessage(doc.Errors, "invalid @k8s local-port") {
+		t.Fatalf("expected local-port parse error, got %v", doc.Errors)
+	}
+
+	podWaitSrc := `### bad
+# @k8s pod=api port=8080 pod-running-timeout=bad
+GET http://example.com
+`
+	doc = Parse("k8s_bad_podwait_alias.http", []byte(podWaitSrc))
+	if !hasParseMessage(doc.Errors, "invalid @k8s pod-running-timeout") {
+		t.Fatalf("expected pod-running-timeout parse error, got %v", doc.Errors)
+	}
+}
+
+func TestParseK8sRequestUseOverride(t *testing.T) {
+	src := `### k8s req
+# @k8s use=cluster-api pod={{pod_name}} port=8081
+GET http://example.com
+`
+	doc := Parse("k8s_req.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+
+	req := doc.Requests[0]
+	if req.K8s == nil {
+		t.Fatalf("expected k8s spec on request")
+	}
+	if req.K8s.Use != "cluster-api" {
+		t.Fatalf("unexpected use %q", req.K8s.Use)
+	}
+	if req.K8s.Inline == nil {
+		t.Fatalf("expected inline overrides")
+	}
+	if req.K8s.Inline.Scope != restfile.K8sScopeRequest {
+		t.Fatalf("expected request scope inline, got %v", req.K8s.Inline.Scope)
+	}
+	if req.K8s.Inline.Pod != "{{pod_name}}" {
+		t.Fatalf("unexpected inline pod %q", req.K8s.Inline.Pod)
+	}
+	if req.K8s.Inline.Target != "pod:{{pod_name}}" {
+		t.Fatalf("unexpected inline target %q", req.K8s.Inline.Target)
+	}
+	if req.K8s.Inline.Port != 8081 || req.K8s.Inline.PortStr != "8081" {
+		t.Fatalf("unexpected inline port %d (%q)", req.K8s.Inline.Port, req.K8s.Inline.PortStr)
+	}
+}
+
+func TestParseK8sRequestDefaultsNamespace(t *testing.T) {
+	src := `### k8s req
+# @k8s pod=api-server port=8080
+GET http://example.com
+`
+	doc := Parse("k8s_req_default_ns.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+
+	req := doc.Requests[0]
+	if req.K8s == nil || req.K8s.Inline == nil {
+		t.Fatalf("expected inline k8s profile")
+	}
+	if req.K8s.Inline.Namespace != "default" {
+		t.Fatalf("expected default namespace, got %q", req.K8s.Inline.Namespace)
+	}
+}
+
+func TestParseK8sRejectsMissingTarget(t *testing.T) {
+	src := `### bad
+# @k8s namespace=default
+GET http://example.com
+`
+	doc := Parse("k8s_missing_target.http", []byte(src))
+	if !hasParseMessage(doc.Errors, "@k8s requires target and port or use=") {
+		t.Fatalf("expected missing target parse error, got %v", doc.Errors)
+	}
+}
+
+func TestParseK8sAllowsNamedPort(t *testing.T) {
+	src := `### bad
+# @k8s pod=api-server port=abc
+GET http://example.com
+`
+	doc := Parse("k8s_named_port.http", []byte(src))
+	if len(doc.Errors) != 0 {
+		t.Fatalf("expected named port to parse, got errors: %v", doc.Errors)
+	}
+	if len(doc.Requests) != 1 || doc.Requests[0].K8s == nil || doc.Requests[0].K8s.Inline == nil {
+		t.Fatalf("expected inline k8s profile")
+	}
+	in := doc.Requests[0].K8s.Inline
+	if in.Port != 0 || in.PortStr != "abc" {
+		t.Fatalf("unexpected named port parse: %d (%q)", in.Port, in.PortStr)
+	}
+}
+
+func TestParseK8sRejectsMalformedNamedPort(t *testing.T) {
+	src := `### bad
+# @k8s pod=api-server port=!!!
+GET http://example.com
+`
+	doc := Parse("k8s_bad_named_port.http", []byte(src))
+	if !hasParseMessage(doc.Errors, "invalid @k8s port") {
+		t.Fatalf("expected bad named port parse error, got %v", doc.Errors)
+	}
+}
+
+func TestParseK8sRejectsPartialTemplatePort(t *testing.T) {
+	src := `### bad
+# @k8s pod=api-server port={{port_name
+GET http://example.com
+`
+	doc := Parse("k8s_bad_template_port.http", []byte(src))
+	if !hasParseMessage(doc.Errors, "invalid @k8s port") {
+		t.Fatalf("expected partial-template port parse error, got %v", doc.Errors)
+	}
+}
+
+func TestParseK8sRequestIgnoresPersist(t *testing.T) {
+	src := `### req
+# @k8s pod=api-server port=8080 persist
+GET http://example.com
+`
+	doc := Parse("k8s_req_persist.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	req := doc.Requests[0]
+	if req.K8s == nil || req.K8s.Inline == nil {
+		t.Fatalf("expected inline k8s profile")
+	}
+	if req.K8s.Inline.Persist.Set {
+		t.Fatalf("request persist should be ignored")
+	}
+	if !hasParseMessage(doc.Warnings, "@k8s request scope ignores persist") {
+		t.Fatalf("expected warning for ignored k8s persist, got %v", doc.Warnings)
+	}
+}
+
+func TestParseK8sGlobalRequiresTarget(t *testing.T) {
+	src := `# @k8s global api namespace=default
+GET http://example.com
+`
+	doc := Parse("k8s_global_missing_target.http", []byte(src))
+	if !hasParseMessage(doc.Errors, "@k8s global scope requires target and port") {
+		t.Fatalf("expected global scope target parse error, got %v", doc.Errors)
+	}
+}
+
+func TestParseK8sServiceTarget(t *testing.T) {
+	src := `### svc
+# @k8s service=api port=http
+GET http://example.com
+`
+	doc := Parse("k8s_service_target.http", []byte(src))
+	if len(doc.Errors) != 0 {
+		t.Fatalf("unexpected parse errors: %v", doc.Errors)
+	}
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	in := doc.Requests[0].K8s.Inline
+	if in == nil {
+		t.Fatalf("expected inline k8s profile")
+	}
+	if in.Target != "service:api" {
+		t.Fatalf("unexpected target %q", in.Target)
+	}
+	if in.Pod != "" {
+		t.Fatalf("expected pod empty for service target, got %q", in.Pod)
+	}
+}
+
+func TestParseK8sRejectsMultipleTargets(t *testing.T) {
+	src := `### bad
+# @k8s pod=api-0 service=api port=8080
+GET http://example.com
+`
+	doc := Parse("k8s_target_conflict.http", []byte(src))
+	if !hasParseMessage(doc.Errors, "multiple @k8s targets specified") {
+		t.Fatalf("expected multiple target error, got %v", doc.Errors)
+	}
+}
+
+func TestParseK8sRejectsConflictingTargetAliases(t *testing.T) {
+	src := `### bad
+# @k8s service=api svc=api-canary port=8080
+GET http://example.com
+`
+	doc := Parse("k8s_target_alias_conflict.http", []byte(src))
+	if !hasParseMessage(doc.Errors, "multiple @k8s targets specified") {
+		t.Fatalf("expected alias conflict error, got %v", doc.Errors)
+	}
+}
+
+func TestParseK8sRejectsUnknownTargetKind(t *testing.T) {
+	src := `### bad
+# @k8s target=job:api port=8080
+GET http://example.com
+`
+	doc := Parse("k8s_bad_target_kind.http", []byte(src))
+	if !hasParseMessage(doc.Errors, "invalid @k8s target") {
+		t.Fatalf("expected invalid target parse error, got %v", doc.Errors)
+	}
+}
+
+func TestParseK8sAndSSHConflict(t *testing.T) {
+	src := `### conflict
+# @k8s pod=api-server port=8080
+# @ssh host=1.2.3.4 user=ops
+GET http://example.com
+`
+	doc := Parse("k8s_ssh_conflict.http", []byte(src))
+	if !hasParseMessage(doc.Errors, "@ssh cannot be combined with @k8s on the same request") {
+		t.Fatalf("expected conflict parse error, got %v", doc.Errors)
+	}
+}
+
+func TestParseSSHAndK8sConflict(t *testing.T) {
+	src := `### conflict
+# @ssh host=1.2.3.4 user=ops
+# @k8s pod=api-server port=8080
+GET http://example.com
+`
+	doc := Parse("ssh_k8s_conflict.http", []byte(src))
+	if !hasParseMessage(doc.Errors, "@k8s cannot be combined with @ssh on the same request") {
+		t.Fatalf("expected conflict parse error, got %v", doc.Errors)
 	}
 }
 
@@ -591,6 +1034,40 @@ Header: value
 	}
 	if len(doc.Requests[0].Variables) != 0 {
 		t.Fatalf("expected no request variables, got %d", len(doc.Requests[0].Variables))
+	}
+}
+
+func TestUnknownCommentDirectiveDoesNotSwallowTrailingFileVars(t *testing.T) {
+	src := `###
+# @name FusionAuthLogin
+POST https://example.com/login
+Content-Type: application/json
+
+{"loginId":"{{admin_email}}"}
+
+###
+@hostname=http://localhost:3000
+# @hostname=https://staging.example.com
+@admin_email=admin@example.com
+`
+
+	doc := Parse("unknown-comment-directive.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	if len(doc.Variables) != 2 {
+		t.Fatalf("expected 2 file variables, got %d", len(doc.Variables))
+	}
+
+	fileVars := map[string]restfile.Variable{}
+	for _, v := range doc.Variables {
+		fileVars[v.Name] = v
+	}
+	if v, ok := fileVars["hostname"]; !ok || v.Scope != restfile.ScopeFile {
+		t.Fatalf("expected hostname as file variable, got %#v", v)
+	}
+	if v, ok := fileVars["admin_email"]; !ok || v.Scope != restfile.ScopeFile {
+		t.Fatalf("expected admin_email as file variable, got %#v", v)
 	}
 }
 
@@ -761,6 +1238,161 @@ GET https://example.com
 	if cap.Expression != "{{response.json.json.token}}" {
 		t.Fatalf("unexpected capture expression %q", cap.Expression)
 	}
+	if cap.Mode != restfile.CaptureExprModeTemplate {
+		t.Fatalf("expected template capture mode, got %v", cap.Mode)
+	}
+	if cap.Line != 2 {
+		t.Fatalf("unexpected capture line=%d", cap.Line)
+	}
+}
+
+func TestParseCaptureDirectiveRSTExpression(t *testing.T) {
+	src := `# @name Capture
+# @capture global-secret auth.token = response.json.token
+GET https://example.com
+`
+
+	doc := Parse("capture-rst.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	req := doc.Requests[0]
+	if len(req.Metadata.Captures) != 1 {
+		t.Fatalf("expected 1 capture, got %d", len(req.Metadata.Captures))
+	}
+	cap := req.Metadata.Captures[0]
+	if cap.Scope != restfile.CaptureScopeGlobal {
+		t.Fatalf("expected global capture scope, got %v", cap.Scope)
+	}
+	if !cap.Secret {
+		t.Fatalf("expected secret capture")
+	}
+	if cap.Name != "auth.token" {
+		t.Fatalf("expected capture name auth.token, got %q", cap.Name)
+	}
+	if cap.Expression != "response.json.token" {
+		t.Fatalf("unexpected capture expression %q", cap.Expression)
+	}
+	if cap.Mode != restfile.CaptureExprModeRTS {
+		t.Fatalf("expected RTS capture mode, got %v", cap.Mode)
+	}
+	if cap.Line != 2 {
+		t.Fatalf("unexpected capture line=%d", cap.Line)
+	}
+}
+
+func TestParseCaptureDirectiveWarnsOnUnknownScope(t *testing.T) {
+	src := `# @capture planet auth.token response.json.token
+GET https://example.com
+`
+	doc := Parse("capture-warn-scope.http", []byte(src))
+	if len(doc.Warnings) == 0 {
+		t.Fatalf("expected warning for invalid capture scope")
+	}
+	if !hasParseMessage(doc.Warnings, `scope "planet" is invalid`) {
+		t.Fatalf("expected scope warning, got %v", doc.Warnings)
+	}
+}
+
+func TestParseCaptureDirectiveWarnsOnMissingExpression(t *testing.T) {
+	src := `# @capture global auth.token
+GET https://example.com
+`
+	doc := Parse("capture-warn-empty.http", []byte(src))
+	if len(doc.Warnings) == 0 {
+		t.Fatalf("expected warning for missing capture expression")
+	}
+	if !hasParseMessage(doc.Warnings, "missing expression") {
+		t.Fatalf("expected missing-expression warning, got %v", doc.Warnings)
+	}
+}
+
+func TestParseCaptureDirectiveWarnsOnJSONPathDoubleDot(t *testing.T) {
+	src := `# @capture global auth.token response.json..token
+GET https://example.com
+`
+	doc := Parse("capture-warn-json-dotdot.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	if len(doc.Requests[0].Metadata.Captures) != 1 {
+		t.Fatalf("expected capture to still parse")
+	}
+	if !hasParseMessage(doc.Warnings, "double dot after json") {
+		t.Fatalf("expected json-path warning, got %v", doc.Warnings)
+	}
+}
+
+func TestParseCaptureDirectiveDoesNotWarnOnQuotedDoubleDot(t *testing.T) {
+	src := `# @capture global note contains("response.json..token", "x")
+GET https://example.com
+`
+	doc := Parse("capture-warn-json-quoted.http", []byte(src))
+	if hasParseMessage(doc.Warnings, "double dot after json") {
+		t.Fatalf("did not expect double-dot warning for quoted string, got %v", doc.Warnings)
+	}
+}
+
+func TestParseCaptureDirectiveStrictAllowsTemplateSyntax(t *testing.T) {
+	src := `# @setting capture.strict true
+# @capture global auth.token {{response.json.token}}
+GET https://example.com
+`
+	doc := Parse("capture-warn-strict.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	if len(doc.Warnings) != 0 {
+		t.Fatalf("did not expect warnings, got %v", doc.Warnings)
+	}
+}
+
+func TestParseCaptureDirectiveStrictDoesNotWarnOnQuotedTemplateMarkers(t *testing.T) {
+	src := `# @setting capture.strict true
+# @capture global note contains(response.text(), "{{token}}")
+GET https://example.com
+`
+	doc := Parse("capture-strict-rst-quoted.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	if len(doc.Warnings) != 0 {
+		t.Fatalf("did not expect warnings for quoted markers, got %v", doc.Warnings)
+	}
+	cap := doc.Requests[0].Metadata.Captures[0]
+	if cap.Mode != restfile.CaptureExprModeRTS {
+		t.Fatalf("expected quoted-marker expression to stay RTS mode, got %v", cap.Mode)
+	}
+}
+
+func TestParseCaptureDirectiveWarnsOnMixedTemplateRTSCall(t *testing.T) {
+	src := `# @capture request mixed contains({{name}}, "x")
+GET https://example.com
+`
+	doc := Parse("capture-warn-mixed.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	if !hasParseMessage(doc.Warnings, "mixes template markers with RTS call syntax") {
+		t.Fatalf("expected mixed-syntax warning, got %v", doc.Warnings)
+	}
+	cap := doc.Requests[0].Metadata.Captures[0]
+	if cap.Mode != restfile.CaptureExprModeTemplate {
+		t.Fatalf("expected template mode for mixed expression, got %v", cap.Mode)
+	}
+}
+
+func TestParseCaptureDirectiveWarnsOnMixedTemplateRTSSingleArgCall(t *testing.T) {
+	src := `# @capture request mixed contains({{name}})
+GET https://example.com
+`
+	doc := Parse("capture-warn-mixed-single-arg.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	if !hasParseMessage(doc.Warnings, "mixes template markers with RTS call syntax") {
+		t.Fatalf("expected mixed-syntax warning, got %v", doc.Warnings)
+	}
 }
 
 func TestParseOAuth2AuthSpec(t *testing.T) {
@@ -861,6 +1493,44 @@ GET https://example.com
 	}
 }
 
+func TestParseCompareDirectiveRejectsSharedEnvironment(t *testing.T) {
+	src := `# @name Compare
+# @compare dev $shared
+GET https://example.com
+`
+
+	doc := Parse("compare.http", []byte(src))
+	if len(doc.Errors) == 0 {
+		t.Fatalf("expected parse errors")
+	}
+	if !hasParseMessage(doc.Errors, "reserved for shared defaults") {
+		t.Fatalf("expected reserved-name parse error, got %v", doc.Errors)
+	}
+	req := doc.Requests[0]
+	if req.Metadata.Compare != nil {
+		t.Fatalf("expected compare metadata to be nil on error")
+	}
+}
+
+func TestParseCompareDirectiveRejectsSharedBaseline(t *testing.T) {
+	src := `# @name Compare
+# @compare dev stage base=$shared
+GET https://example.com
+`
+
+	doc := Parse("compare.http", []byte(src))
+	if len(doc.Errors) == 0 {
+		t.Fatalf("expected parse errors")
+	}
+	if !hasParseMessage(doc.Errors, "reserved for shared defaults") {
+		t.Fatalf("expected reserved-name parse error, got %v", doc.Errors)
+	}
+	req := doc.Requests[0]
+	if req.Metadata.Compare != nil {
+		t.Fatalf("expected compare metadata to be nil on error")
+	}
+}
+
 func TestParseMultiLineScripts(t *testing.T) {
 	src := `# @name Scripted
 # @script pre-request
@@ -901,6 +1571,198 @@ GET https://example.com/api
 		if !strings.Contains(testBlock.Body, fragment) {
 			t.Fatalf("expected test script body to contain %q, got %q", fragment, testBlock.Body)
 		}
+	}
+}
+
+func TestParseScriptBlockBraces(t *testing.T) {
+	src := `# @name Scripted
+# @script test
+> {%
+client.test("ok", function () {
+tests.assert(response.statusCode === 200, "ok");
+});
+%}
+GET https://example.com/api
+`
+
+	doc := Parse("scriptblock.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	req := doc.Requests[0]
+	if len(req.Metadata.Scripts) != 1 {
+		t.Fatalf("expected 1 script block, got %d", len(req.Metadata.Scripts))
+	}
+	script := req.Metadata.Scripts[0]
+	if script.Kind != "test" {
+		t.Fatalf("expected test script, got %s", script.Kind)
+	}
+	expected := "client.test(\"ok\", function () {\n" +
+		"tests.assert(response.statusCode === 200, \"ok\");\n" +
+		"});"
+	if script.Body != expected {
+		t.Fatalf("unexpected script body: %q", script.Body)
+	}
+}
+
+func TestParseScriptInlineBraces(t *testing.T) {
+	src := `# @script test
+> {% client.test("ok"); %}
+GET https://example.com/api
+`
+
+	doc := Parse("inline-braces.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	req := doc.Requests[0]
+	if len(req.Metadata.Scripts) != 1 {
+		t.Fatalf("expected 1 script block, got %d", len(req.Metadata.Scripts))
+	}
+	body := req.Metadata.Scripts[0].Body
+	if body != "{% client.test(\"ok\"); %}" {
+		t.Fatalf("unexpected inline script body: %q", body)
+	}
+}
+
+func TestParseScriptBlockMissingEnd(t *testing.T) {
+	src := `# @script test
+> {%
+client.test("ok", function () {});
+### Next
+GET https://example.com/next
+`
+
+	doc := Parse("missing-end.http", []byte(src))
+	if len(doc.Errors) == 0 {
+		t.Fatalf("expected parse errors")
+	}
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	if doc.Requests[0].URL != "https://example.com/next" {
+		t.Fatalf("unexpected request url: %q", doc.Requests[0].URL)
+	}
+	if doc.Errors[0].Message != "script block missing %}" {
+		t.Fatalf("unexpected error message: %q", doc.Errors[0].Message)
+	}
+}
+
+func TestParseScriptBlockUnicodeWhitespaceStart(t *testing.T) {
+	src := "# @script test\n" +
+		">\u00A0{%\n" +
+		"tests.assert(true, \"ok\");\n" +
+		"%}\n" +
+		"GET https://example.com\n"
+
+	doc := Parse("unicode-start.http", []byte(src))
+	if len(doc.Errors) != 0 {
+		t.Fatalf("expected no parse errors, got %v", doc.Errors)
+	}
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	scripts := doc.Requests[0].Metadata.Scripts
+	if len(scripts) != 1 {
+		t.Fatalf("expected 1 script, got %d", len(scripts))
+	}
+	if scripts[0].Body != `tests.assert(true, "ok");` {
+		t.Fatalf("unexpected script body: %q", scripts[0].Body)
+	}
+}
+
+func TestParseScriptBlockUnicodeWhitespaceEnd(t *testing.T) {
+	src := "# @script test\n" +
+		"> {%\n" +
+		"tests.assert(true, \"ok\");\n" +
+		">\u2003%}\n" +
+		"GET https://example.com\n"
+
+	doc := Parse("unicode-end.http", []byte(src))
+	if len(doc.Errors) != 0 {
+		t.Fatalf("expected no parse errors, got %v", doc.Errors)
+	}
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	scripts := doc.Requests[0].Metadata.Scripts
+	if len(scripts) != 1 {
+		t.Fatalf("expected 1 script, got %d", len(scripts))
+	}
+	if scripts[0].Body != `tests.assert(true, "ok");` {
+		t.Fatalf("unexpected script body: %q", scripts[0].Body)
+	}
+}
+
+func TestParseScriptBlockMarkersInsideBlockComment(t *testing.T) {
+	src := `/*
+> {%
+tests.assert(true, "ignored");
+%}
+*/
+GET https://example.com
+`
+
+	doc := Parse("commented-script.http", []byte(src))
+	if len(doc.Errors) != 0 {
+		t.Fatalf("expected no parse errors, got %v", doc.Errors)
+	}
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	if len(doc.Requests[0].Metadata.Scripts) != 0 {
+		t.Fatalf(
+			"expected no scripts from commented block, got %d",
+			len(doc.Requests[0].Metadata.Scripts),
+		)
+	}
+}
+
+func TestParseScriptBlockEndWithPrefix(t *testing.T) {
+	src := `# @script test
+> {%
+tests.assert(true, "ok");
+> %}
+GET https://example.com
+`
+
+	doc := Parse("script-end-prefix.http", []byte(src))
+	if len(doc.Errors) != 0 {
+		t.Fatalf("expected no parse errors, got %v", doc.Errors)
+	}
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	scripts := doc.Requests[0].Metadata.Scripts
+	if len(scripts) != 1 {
+		t.Fatalf("expected 1 script, got %d", len(scripts))
+	}
+	if scripts[0].Body != `tests.assert(true, "ok");` {
+		t.Fatalf("unexpected script body: %q", scripts[0].Body)
+	}
+}
+
+func TestParseScriptBlockEndWithComment(t *testing.T) {
+	src := `# @script test
+> {%
+tests.assert(true, "ok");
+%} // end
+GET https://example.com
+`
+
+	doc := Parse("script-end-comment.http", []byte(src))
+	if len(doc.Errors) != 0 {
+		t.Fatalf("expected no parse errors, got %v", doc.Errors)
+	}
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	scripts := doc.Requests[0].Metadata.Scripts
+	if len(scripts) != 1 {
+		t.Fatalf("expected 1 script, got %d", len(scripts))
+	}
+	if scripts[0].Body != `tests.assert(true, "ok");` {
+		t.Fatalf("unexpected script body: %q", scripts[0].Body)
 	}
 }
 
@@ -1534,6 +2396,28 @@ GET https://example.com/api
 	}
 	if spec.Enabled {
 		t.Fatalf("expected trace disabled")
+	}
+}
+
+func TestParseTraceDirectiveSkipsEmptyPhaseNames(t *testing.T) {
+	src := `# @trace <=50ms =100ms total<=400ms
+GET https://example.com/api
+`
+
+	doc := Parse("trace-empty-phase.http", []byte(src))
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	req := doc.Requests[0]
+	spec := req.Metadata.Trace
+	if spec == nil {
+		t.Fatalf("expected trace metadata")
+	}
+	if spec.Budgets.Total != 400*time.Millisecond {
+		t.Fatalf("unexpected total budget: %v", spec.Budgets.Total)
+	}
+	if len(spec.Budgets.Phases) != 0 {
+		t.Fatalf("expected no phase budgets, got %v", spec.Budgets.Phases)
 	}
 }
 

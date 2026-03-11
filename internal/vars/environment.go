@@ -12,7 +12,17 @@ import (
 	"github.com/unkn0wn-root/resterm/internal/errdef"
 )
 
+// SharedEnvKey is the reserved environment name whose variables are merged
+// as defaults into every other environment. Environment-specific values win.
+const SharedEnvKey = "$shared"
+
 type EnvironmentSet map[string]map[string]string
+
+// IsReservedEnvironment reports whether the name is reserved for
+// framework behavior and cannot be selected as a concrete environment.
+func IsReservedEnvironment(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), SharedEnvKey)
+}
 
 func LoadEnvironmentFile(path string) (EnvironmentSet, error) {
 	if IsDotEnvPath(path) {
@@ -37,24 +47,58 @@ func loadJSONEnvironmentFile(path string) (envs EnvironmentSet, err error) {
 		return nil, errdef.Wrap(errdef.CodeFilesystem, err, "read env file %s", path)
 	}
 
-	var raw interface{}
+	var raw any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, errdef.Wrap(errdef.CodeParse, err, "parse env file %s", path)
 	}
 
 	envs = make(EnvironmentSet)
 	switch v := raw.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		for envName, value := range v {
 			envs[envName] = flattenEnv(value)
 		}
 	default:
 		return nil, errdef.New(errdef.CodeParse, "unsupported env file format: %T", raw)
 	}
+	hadShared := false
+	if _, ok := envs[SharedEnvKey]; ok {
+		hadShared = true
+	}
+	applyShared(envs)
+	if hadShared && len(envs) == 0 {
+		return nil, errdef.New(
+			errdef.CodeParse,
+			`env file %s defines only %q; add at least one concrete environment`,
+			path,
+			SharedEnvKey,
+		)
+	}
 	return envs, nil
 }
 
-func flattenEnv(value interface{}) map[string]string {
+// applyShared merges the $shared environment's values as defaults into every
+// other environment (environment-specific values take precedence), then removes
+// $shared from the set so it never appears as a selectable environment.
+func applyShared(envs EnvironmentSet) {
+	shared, ok := envs[SharedEnvKey]
+	if !ok {
+		return
+	}
+	for name, env := range envs {
+		if name == SharedEnvKey {
+			continue
+		}
+		for k, v := range shared {
+			if _, exists := env[k]; !exists {
+				env[k] = v
+			}
+		}
+	}
+	delete(envs, SharedEnvKey)
+}
+
+func flattenEnv(value any) map[string]string {
 	result := make(map[string]string)
 	flattenEnvValue("", value, result)
 	return result
@@ -63,9 +107,9 @@ func flattenEnv(value interface{}) map[string]string {
 // Recursively walks through JSON structure to build dot-notation paths.
 // Nested objects become "parent.child" and arrays become "parent[0]".
 // Makes deeply nested config accessible via simple string keys.
-func flattenEnvValue(prefix string, value interface{}, out map[string]string) {
+func flattenEnvValue(prefix string, value any, out map[string]string) {
 	switch v := value.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		for key, child := range v {
 			if key == "" {
 				continue
@@ -76,7 +120,7 @@ func flattenEnvValue(prefix string, value interface{}, out map[string]string) {
 			}
 			flattenEnvValue(next, child, out)
 		}
-	case []interface{}:
+	case []any:
 		for idx, item := range v {
 			childKey := strconv.Itoa(idx)
 			if prefix != "" {

@@ -8,7 +8,7 @@ import (
 )
 
 func TestMetadataHintCatalogContainsRequiredDirectives(t *testing.T) {
-	required := []string{"@body", "@const", "@variables", "@query", "@trace"}
+	required := []string{"@body", "@const", "@variables", "@query", "@trace", "@patch", "@k8s"}
 	labels := make(map[string]struct{}, len(hint.MetaCatalog))
 	for _, option := range hint.MetaCatalog {
 		labels[option.Label] = struct{}{}
@@ -71,6 +71,33 @@ func TestFilterMetadataHintOptionsForSubcommands(t *testing.T) {
 	for _, option := range filteredTrace {
 		if !strings.HasPrefix(option.Label, "tot") {
 			t.Fatalf("expected tot* suggestion, got %q", option.Label)
+		}
+	}
+
+	applyOptions := hint.MetaOptions("apply", "")
+	if len(applyOptions) == 0 {
+		t.Fatal("expected apply subcommand options")
+	}
+	if !hintOptionsContain(applyOptions, "use=") {
+		t.Fatalf("expected apply use= suggestion, got %v", applyOptions)
+	}
+
+	k8sOptions := hint.MetaOptions("k8s", "")
+	if len(k8sOptions) == 0 {
+		t.Fatal("expected k8s subcommand options")
+	}
+	for _, label := range []string{
+		"target=",
+		"namespace=",
+		"pod=",
+		"service=",
+		"deployment=",
+		"statefulset=",
+		"port=",
+		"use=",
+	} {
+		if !hintOptionsContain(k8sOptions, label) {
+			t.Fatalf("missing k8s subcommand %q", label)
 		}
 	}
 }

@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/getkin/kin-openapi/openapi3"
-
 	"github.com/unkn0wn-root/resterm/internal/openapi"
 	"github.com/unkn0wn-root/resterm/internal/openapi/model"
 	"github.com/unkn0wn-root/resterm/internal/openapi/parser"
@@ -113,15 +111,15 @@ func TestBuilderGenerateQueryParameterStyles(t *testing.T) {
 	builder := NewBuilder()
 	explode := true
 
-	arraySchema := &openapi3.Schema{
-		Type:  &openapi3.Types{"array"},
-		Items: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+	arraySchema := &model.Schema{
+		Types: []model.SchemaType{model.TypeArray},
+		Items: &model.SchemaRef{Node: &model.Schema{Types: []model.SchemaType{model.TypeString}}},
 	}
-	objectSchema := &openapi3.Schema{
-		Type: &openapi3.Types{"object"},
-		Properties: map[string]*openapi3.SchemaRef{
-			"name":  {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
-			"owner": {Value: &openapi3.Schema{Type: &openapi3.Types{"string"}}},
+	objectSchema := &model.Schema{
+		Types: []model.SchemaType{model.TypeObject},
+		Properties: map[string]*model.SchemaRef{
+			"name":  {Node: &model.Schema{Types: []model.SchemaType{model.TypeString}}},
+			"owner": {Node: &model.Schema{Types: []model.SchemaType{model.TypeString}}},
 		},
 	}
 
@@ -138,7 +136,7 @@ func TestBuilderGenerateQueryParameterStyles(t *testing.T) {
 						Explode:  &explode,
 						Example:  model.Example{Value: []any{"red", "blue"}, HasValue: true},
 						Schema: &model.SchemaRef{
-							Payload: &openapi3.SchemaRef{Value: arraySchema},
+							Node: arraySchema,
 						},
 					},
 					{
@@ -151,7 +149,7 @@ func TestBuilderGenerateQueryParameterStyles(t *testing.T) {
 							HasValue: true,
 						},
 						Schema: &model.SchemaRef{
-							Payload: &openapi3.SchemaRef{Value: objectSchema},
+							Node: objectSchema,
 						},
 					},
 				},
@@ -188,6 +186,50 @@ func TestBuilderGenerateQueryParameterStyles(t *testing.T) {
 		t.Fatalf("missing query_filters variable")
 	} else if value.Value != "filters[name]=gizmo&filters[owner]=alice" {
 		t.Fatalf("unexpected query_filters value: %s", value.Value)
+	}
+}
+
+func TestBuilderGenerateCaseInsensitiveSchemaTypes(t *testing.T) {
+	t.Parallel()
+
+	b := NewBuilder()
+	spec := &model.Spec{
+		Operations: []model.Operation{
+			{
+				Method: model.MethodGet,
+				Path:   "/items",
+				Parameters: []model.Parameter{
+					{
+						Name:     "tags",
+						Location: model.InQuery,
+						Schema: &model.SchemaRef{
+							Node: &model.Schema{
+								Types: []model.SchemaType{" ARRAY "},
+								Items: &model.SchemaRef{
+									Node: &model.Schema{Types: []model.SchemaType{"STRING"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	doc, err := b.Generate(context.Background(), spec, openapi.GeneratorOptions{})
+	if err != nil {
+		t.Fatalf("generate spec: %v", err)
+	}
+	if len(doc.Requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(doc.Requests))
+	}
+	req := doc.Requests[0]
+	v, ok := findVariable(req.Variables, "query_tags")
+	if !ok {
+		t.Fatalf("missing query_tags variable")
+	}
+	if v.Value != "tags=sample" {
+		t.Fatalf("unexpected query_tags value: %q", v.Value)
 	}
 }
 
@@ -272,6 +314,90 @@ func TestBuilderGenerateOAuthAuthorizationCode(t *testing.T) {
 
 	if warnings := builder.Warnings(); len(warnings) != 0 {
 		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+}
+
+func TestSelectRequestMedia(t *testing.T) {
+	t.Parallel()
+
+	media := []model.MediaType{
+		{ContentType: "text/plain"},
+		{ContentType: "application/json"},
+	}
+
+	selected := selectRequestMedia(media)
+	if selected == nil {
+		t.Fatalf("expected selected media type")
+	}
+	if selected.ContentType != "application/json" {
+		t.Fatalf("expected JSON media type, got %s", selected.ContentType)
+	}
+	if selected != &media[1] {
+		t.Fatalf("expected pointer to media[1]")
+	}
+}
+
+func TestSelectRequestMediaFallbackToFirst(t *testing.T) {
+	t.Parallel()
+
+	media := []model.MediaType{
+		{ContentType: "application/xml"},
+		{ContentType: "text/plain"},
+	}
+
+	selected := selectRequestMedia(media)
+	if selected == nil {
+		t.Fatalf("expected selected media type")
+	}
+	if selected != &media[0] {
+		t.Fatalf("expected pointer to first media type")
+	}
+}
+
+func TestSerializeParamValueDefaults(t *testing.T) {
+	t.Parallel()
+
+	rb := requestBuilder{}
+
+	arrayParam := model.Parameter{Name: "tags", Location: model.InQuery}
+	if got := rb.serializeParamValue(
+		arrayParam,
+		schemaArray,
+		pStyForm,
+		false,
+		[]any{"red", "blue"},
+	); got != "red,blue" {
+		t.Fatalf("unexpected array value: %s", got)
+	}
+	if got := rb.serializeParamValue(
+		arrayParam,
+		schemaArray,
+		pStyUnk,
+		true,
+		[]any{"red", "blue"},
+	); got != "tags=red&tags=blue" {
+		t.Fatalf("unexpected exploded array value: %s", got)
+	}
+
+	objectParam := model.Parameter{Name: "filters", Location: model.InQuery}
+	sampleObject := map[string]any{"b": "2", "a": "1"}
+	if got := rb.serializeParamValue(
+		objectParam,
+		schemaObject,
+		pStyDeepObj,
+		true,
+		sampleObject,
+	); got != "filters[a]=1&filters[b]=2" {
+		t.Fatalf("unexpected deepobject value: %s", got)
+	}
+	if got := rb.serializeParamValue(
+		objectParam,
+		schemaObject,
+		pStyUnk,
+		false,
+		sampleObject,
+	); got != "a,1,b,2" {
+		t.Fatalf("unexpected object key/value value: %s", got)
 	}
 }
 

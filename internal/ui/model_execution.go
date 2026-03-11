@@ -2,17 +2,13 @@ package ui
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -22,6 +18,7 @@ import (
 	"github.com/unkn0wn-root/resterm/internal/grpcclient"
 	"github.com/unkn0wn-root/resterm/internal/httpclient"
 	"github.com/unkn0wn-root/resterm/internal/httpver"
+	"github.com/unkn0wn-root/resterm/internal/k8s"
 	"github.com/unkn0wn-root/resterm/internal/oauth"
 	"github.com/unkn0wn-root/resterm/internal/parser"
 	"github.com/unkn0wn-root/resterm/internal/restfile"
@@ -30,7 +27,8 @@ import (
 	"github.com/unkn0wn-root/resterm/internal/settings"
 	"github.com/unkn0wn-root/resterm/internal/ssh"
 	"github.com/unkn0wn-root/resterm/internal/stream"
-	"github.com/unkn0wn-root/resterm/internal/traceutil"
+	"github.com/unkn0wn-root/resterm/internal/tracebudget"
+	"github.com/unkn0wn-root/resterm/internal/tunnel"
 	"github.com/unkn0wn-root/resterm/internal/urltpl"
 	"github.com/unkn0wn-root/resterm/internal/util"
 	"github.com/unkn0wn-root/resterm/internal/vars"
@@ -258,7 +256,7 @@ func (m *Model) sendActiveRequest() tea.Cmd {
 	m.doc = doc
 	m.syncRequestList(doc)
 	m.setActiveRequest(req)
-	m.syncSSHGlobals(doc)
+	m.syncAllGlobals(doc)
 
 	cloned := cloneRequest(req)
 	m.currentRequest = cloned
@@ -284,7 +282,7 @@ func (m *Model) sendActiveRequest() tea.Cmd {
 		}
 		if cloned.Metadata.Trace != nil && cloned.Metadata.Trace.Enabled {
 			options.Trace = true
-			if budget, ok := traceutil.BudgetFromSpec(cloned.Metadata.Trace); ok {
+			if budget, ok := tracebudget.FromSpec(cloned.Metadata.Trace); ok {
 				options.TraceBudget = &budget
 			}
 		}
@@ -303,7 +301,7 @@ func (m *Model) sendActiveRequest() tea.Cmd {
 
 	if cloned.Metadata.Trace != nil && cloned.Metadata.Trace.Enabled {
 		options.Trace = true
-		if budget, ok := traceutil.BudgetFromSpec(cloned.Metadata.Trace); ok {
+		if budget, ok := tracebudget.FromSpec(cloned.Metadata.Trace); ok {
 			options.TraceBudget = &budget
 		}
 	}
@@ -379,7 +377,7 @@ func (m *Model) startConfigCompareFromEditor() tea.Cmd {
 	m.doc = doc
 	m.syncRequestList(doc)
 	m.setActiveRequest(req)
-	m.syncSSHGlobals(doc)
+	m.syncAllGlobals(doc)
 
 	cloned := cloneRequest(req)
 	m.currentRequest = cloned
@@ -392,7 +390,7 @@ func (m *Model) startConfigCompareFromEditor() tea.Cmd {
 	}
 	if cloned.Metadata.Trace != nil && cloned.Metadata.Trace.Enabled {
 		options.Trace = true
-		if budget, ok := traceutil.BudgetFromSpec(cloned.Metadata.Trace); ok {
+		if budget, ok := tracebudget.FromSpec(cloned.Metadata.Trace); ok {
 			options.TraceBudget = &budget
 		}
 	}
@@ -411,10 +409,18 @@ func (m *Model) executeRequest(
 	extras ...map[string]string,
 ) tea.Cmd {
 	options = m.resolveHTTPOptions(options)
+	if req != nil && tunnel.HasConflict(req.SSH != nil, req.K8s != nil) {
+		return func() tea.Msg {
+			return responseMsg{
+				err:      errdef.New(errdef.CodeHTTP, "@ssh cannot be combined with @k8s"),
+				executed: req,
+			}
+		}
+	}
 
 	if req != nil && req.Metadata.Trace != nil && req.Metadata.Trace.Enabled {
 		options.Trace = true
-		if budget, ok := traceutil.BudgetFromSpec(req.Metadata.Trace); ok {
+		if budget, ok := tracebudget.FromSpec(req.Metadata.Trace); ok {
 			options.TraceBudget = &budget
 		}
 	}
@@ -572,9 +578,12 @@ func (m *Model) executeRequest(
 		if err != nil {
 			return responseMsg{err: errdef.Wrap(errdef.CodeHTTP, err, "resolve ssh"), executed: req}
 		}
-		if sshPlan != nil {
-			options.SSH = sshPlan
+		k8sPlan, err := m.resolveK8s(doc, req, resolver, envName)
+		if err != nil {
+			return responseMsg{err: errdef.Wrap(errdef.CodeHTTP, err, "resolve k8s"), executed: req}
 		}
+		options.SSH = sshPlan
+		options.K8s = k8sPlan
 
 		globalSettings := settings.FromEnv(m.cfg.EnvironmentSet, envName)
 		fileSettings := map[string]string{}
@@ -647,9 +656,8 @@ func (m *Model) executeRequest(
 				grpcOpts.DialTimeout = effectiveTimeout
 			}
 
-			if sshPlan != nil {
-				grpcOpts.SSH = sshPlan
-			}
+			grpcOpts.SSH = sshPlan
+			grpcOpts.K8s = k8sPlan
 
 			hook := func(session *stream.Session) {
 				m.attachGRPCSession(session, req)
@@ -666,16 +674,24 @@ func (m *Model) executeRequest(
 			}
 
 			respForScripts := grpcScriptResponse(req, grpcResp)
+			capVars := mergeVariableMaps(m.collectVariables(doc, req, envName), scriptVars)
+			for _, extra := range extras {
+				if len(extra) == 0 {
+					continue
+				}
+				capVars = mergeVariableMaps(capVars, extra)
+			}
 			var captures captureResult
-			if err := m.applyCaptures(
-				doc,
-				req,
-				resolver,
-				respForScripts,
-				nil,
-				&captures,
-				envName,
-			); err != nil {
+			if err := m.applyCaptures(captureRun{
+				doc:  doc,
+				req:  req,
+				res:  resolver,
+				resp: respForScripts,
+				out:  &captures,
+				env:  envName,
+				v:    capVars,
+				x:    extraVals,
+			}); err != nil {
 				return responseMsg{err: err, executed: req}
 			}
 
@@ -770,16 +786,25 @@ func (m *Model) executeRequest(
 		}
 
 		respForScripts := httpScriptResponse(response)
+		capVars := mergeVariableMaps(m.collectVariables(doc, req, envName), scriptVars)
+		for _, extra := range extras {
+			if len(extra) == 0 {
+				continue
+			}
+			capVars = mergeVariableMaps(capVars, extra)
+		}
 		var captures captureResult
-		if err := m.applyCaptures(
-			doc,
-			req,
-			resolver,
-			respForScripts,
-			streamInfo,
-			&captures,
-			envName,
-		); err != nil {
+		if err := m.applyCaptures(captureRun{
+			doc:    doc,
+			req:    req,
+			res:    resolver,
+			resp:   respForScripts,
+			stream: streamInfo,
+			out:    &captures,
+			env:    envName,
+			v:      capVars,
+			x:      extraVals,
+		}); err != nil {
 			return responseMsg{err: err, executed: req}
 		}
 
@@ -1185,6 +1210,7 @@ func (m *Model) buildResolver(
 
 	providers = append(providers, vars.EnvProvider{})
 	res := vars.NewResolver(providers...)
+	res.AddRefResolver(vars.EnvRefResolver)
 	res.SetExprEval(m.rtsEval(ctx, doc, req, resolvedEnv, base, false, extraVals, extras...))
 	res.SetExprPos(m.rtsPos(doc, req))
 	return res
@@ -1282,6 +1308,7 @@ func (m *Model) buildDisplayResolver(
 
 	providers = append(providers, vars.EnvProvider{})
 	res := vars.NewResolver(providers...)
+	res.AddRefResolver(vars.EnvRefResolver)
 	res.SetExprEval(m.rtsEval(ctx, doc, req, resolvedEnv, base, true, extraVals, extras...))
 	res.SetExprPos(m.rtsPos(doc, req))
 	return res
@@ -1296,16 +1323,7 @@ func (m *Model) resolveSSH(
 	if req == nil || req.SSH == nil {
 		return nil, nil
 	}
-	if m.sshGlobals != nil {
-		path := m.documentRuntimePath(doc)
-		m.sshGlobals.set(path, docSSHProfiles(doc))
-	}
-
-	manager := m.sshMgr
-	if manager == nil {
-		manager = ssh.NewManager()
-		m.sshMgr = manager
-	}
+	manager := m.ensureSSHManager()
 	fileProfiles := docSSHProfiles(doc)
 	globalProfiles := []restfile.SSHProfile(nil)
 	if m.sshGlobals != nil {
@@ -1324,11 +1342,51 @@ func (m *Model) resolveSSH(
 	return &ssh.Plan{Manager: manager, Config: cfg}, nil
 }
 
+func (m *Model) resolveK8s(
+	doc *restfile.Document,
+	req *restfile.Request,
+	resolver *vars.Resolver,
+	envName string,
+) (*k8s.Plan, error) {
+	if req == nil || req.K8s == nil {
+		return nil, nil
+	}
+	manager := m.ensureK8sManager()
+	fileProfiles := docK8sProfiles(doc)
+	globalProfiles := []restfile.K8sProfile(nil)
+	if m.k8sGlobals != nil {
+		globalProfiles = m.k8sGlobals.all()
+	}
+	cfg, err := k8s.Resolve(req.K8s, fileProfiles, globalProfiles, resolver, envName)
+	if err != nil {
+		return nil, err
+	}
+	return &k8s.Plan{Manager: manager, Config: cfg}, nil
+}
+
 func (m *Model) documentRuntimePath(doc *restfile.Document) string {
 	if doc != nil && strings.TrimSpace(doc.Path) != "" {
 		return doc.Path
 	}
 	return m.currentFile
+}
+
+func (m *Model) ensureSSHManager() *ssh.Manager {
+	if m.sshMgr != nil {
+		return m.sshMgr
+	}
+	// Defensive for zero-value models used in tests and non-UI helpers.
+	m.sshMgr = ssh.NewManager()
+	return m.sshMgr
+}
+
+func (m *Model) ensureK8sManager() *k8s.Manager {
+	if m.k8sMgr != nil {
+		return m.k8sMgr
+	}
+	// Defensive for zero-value models used in tests and non-UI helpers.
+	m.k8sMgr = k8s.NewManager()
+	return m.k8sMgr
 }
 
 func (m *Model) syncSSHGlobals(doc *restfile.Document) {
@@ -1339,11 +1397,47 @@ func (m *Model) syncSSHGlobals(doc *restfile.Document) {
 	m.sshGlobals.set(path, docSSHProfiles(doc))
 }
 
+func (m *Model) syncK8sGlobals(doc *restfile.Document) {
+	if m.k8sGlobals == nil {
+		return
+	}
+	path := m.documentRuntimePath(doc)
+	m.k8sGlobals.set(path, docK8sProfiles(doc))
+}
+
 func docSSHProfiles(doc *restfile.Document) []restfile.SSHProfile {
 	if doc == nil {
 		return nil
 	}
 	return doc.SSH
+}
+
+func docK8sProfiles(doc *restfile.Document) []restfile.K8sProfile {
+	if doc == nil {
+		return nil
+	}
+	return doc.K8s
+}
+
+func (m *Model) syncPatchGlobals(doc *restfile.Document) {
+	if m.patchGlobals == nil {
+		return
+	}
+	path := m.documentRuntimePath(doc)
+	m.patchGlobals.set(path, docPatchProfiles(doc))
+}
+
+func (m *Model) syncAllGlobals(doc *restfile.Document) {
+	m.syncSSHGlobals(doc)
+	m.syncK8sGlobals(doc)
+	m.syncPatchGlobals(doc)
+}
+
+func docPatchProfiles(doc *restfile.Document) []restfile.PatchProfile {
+	if doc == nil {
+		return nil
+	}
+	return doc.Patches
 }
 
 func (m *Model) mergeFileRuntimeVars(
@@ -1594,450 +1688,6 @@ func maskSecret(value string, secret bool) string {
 		return "•••"
 	}
 	return value
-}
-
-type captureResult struct {
-	requestVars map[string]restfile.Variable
-	fileVars    map[string]restfile.Variable
-}
-
-func (r *captureResult) addRequest(name, value string, secret bool) {
-	if r == nil {
-		return
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return
-	}
-	if r.requestVars == nil {
-		r.requestVars = make(map[string]restfile.Variable)
-	}
-	key := strings.ToLower(name)
-	r.requestVars[key] = restfile.Variable{
-		Name:   name,
-		Value:  value,
-		Secret: secret,
-		Scope:  restfile.ScopeRequest,
-	}
-}
-
-func (r *captureResult) addFile(name, value string, secret bool) {
-	if r == nil {
-		return
-	}
-
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return
-	}
-
-	if r.fileVars == nil {
-		r.fileVars = make(map[string]restfile.Variable)
-	}
-
-	key := strings.ToLower(name)
-	r.fileVars[key] = restfile.Variable{
-		Name:   name,
-		Value:  value,
-		Secret: secret,
-		Scope:  restfile.ScopeFile,
-	}
-}
-
-func (m *Model) applyCaptures(
-	doc *restfile.Document,
-	req *restfile.Request,
-	resolver *vars.Resolver,
-	resp *scripts.Response,
-	stream *scripts.StreamInfo,
-	result *captureResult,
-	envName string,
-) error {
-	if req == nil || resp == nil {
-		return nil
-	}
-	if len(req.Metadata.Captures) == 0 {
-		return nil
-	}
-
-	envKey := vars.SelectEnv(m.cfg.EnvironmentSet, envName, m.cfg.EnvironmentName)
-	ctx := newCaptureContext(resp, stream)
-	for _, capture := range req.Metadata.Captures {
-		value, err := ctx.evaluate(capture.Expression, resolver)
-		if err != nil {
-			return errdef.Wrap(errdef.CodeScript, err, "evaluate capture %s", capture.Name)
-		}
-		switch capture.Scope {
-		case restfile.CaptureScopeRequest:
-			upsertVariable(
-				&req.Variables,
-				restfile.ScopeRequest,
-				capture.Name,
-				value,
-				capture.Secret,
-			)
-			if result != nil {
-				result.addRequest(capture.Name, value, capture.Secret)
-			}
-		case restfile.CaptureScopeFile:
-			if doc != nil {
-				upsertVariable(
-					&doc.Variables,
-					restfile.ScopeFile,
-					capture.Name,
-					value,
-					capture.Secret,
-				)
-			}
-			if result != nil {
-				result.addFile(capture.Name, value, capture.Secret)
-			}
-		case restfile.CaptureScopeGlobal:
-			if m.globals != nil {
-				m.globals.set(envKey, capture.Name, value, capture.Secret)
-			}
-		}
-	}
-
-	if result != nil && len(result.fileVars) > 0 && m.fileVars != nil {
-		path := m.documentRuntimePath(doc)
-		for _, entry := range result.fileVars {
-			m.fileVars.set(envKey, path, entry.Name, entry.Value, entry.Secret)
-		}
-	}
-
-	return nil
-}
-
-type captureContext struct {
-	response  *scripts.Response
-	body      string
-	headers   http.Header
-	stream    *scripts.StreamInfo
-	jsonOnce  sync.Once
-	jsonValue interface{}
-	jsonErr   error
-}
-
-var captureTemplatePattern = regexp.MustCompile(`\{\{([^}]+)\}\}`)
-
-func newCaptureContext(resp *scripts.Response, stream *scripts.StreamInfo) *captureContext {
-	body := ""
-	if resp != nil {
-		body = string(resp.Body)
-	}
-
-	var headers http.Header
-	if resp != nil {
-		headers = cloneHeader(resp.Header)
-	}
-	return &captureContext{response: resp, body: body, headers: headers, stream: stream}
-}
-
-func (c *captureContext) evaluate(expr string, resolver *vars.Resolver) (string, error) {
-	var firstErr error
-	expanded := captureTemplatePattern.ReplaceAllStringFunc(expr, func(match string) string {
-		name := strings.TrimSpace(captureTemplatePattern.FindStringSubmatch(match)[1])
-		if name == "" {
-			return match
-		}
-
-		if strings.HasPrefix(strings.ToLower(name), "response.") {
-			value, err := c.lookupResponse(strings.TrimSpace(name[len("response."):]))
-			if err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
-				return match
-			}
-			return value
-		}
-
-		if strings.HasPrefix(strings.ToLower(name), "stream.") {
-			value, err := c.lookupStream(strings.TrimSpace(name[len("stream."):]))
-			if err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
-				return match
-			}
-			return value
-		}
-
-		if resolver != nil {
-			res, err := resolver.ExpandTemplates(match)
-			if err == nil {
-				return res
-			}
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-		return match
-	})
-
-	if firstErr != nil {
-		return "", firstErr
-	}
-	return expanded, nil
-}
-
-func (c *captureContext) lookupResponse(path string) (string, error) {
-	switch strings.ToLower(path) {
-	case "body":
-		return c.body, nil
-	case "status":
-		if c.response != nil {
-			return c.response.Status, nil
-		}
-		return "", nil
-	case "statuscode":
-		if c.response != nil {
-			return strconv.Itoa(c.response.Code), nil
-		}
-		return "", nil
-	}
-	if strings.HasPrefix(strings.ToLower(path), "headers.") {
-		key := path[len("headers."):]
-		if c.headers == nil {
-			return "", fmt.Errorf("header %s not available", key)
-		}
-		values := c.headers.Values(key)
-		if len(values) == 0 {
-			values = c.headers.Values(http.CanonicalHeaderKey(key))
-		}
-		if len(values) == 0 {
-			return "", fmt.Errorf("header %s not found", key)
-		}
-		return strings.Join(values, ", "), nil
-	}
-	if strings.HasPrefix(strings.ToLower(path), "json") {
-		return c.lookupJSON(path), nil
-	}
-	return "", fmt.Errorf("unsupported response reference %q", path)
-}
-
-func (c *captureContext) lookupStream(path string) (string, error) {
-	if c.stream == nil {
-		return "", fmt.Errorf("stream data not available")
-	}
-
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
-		return "", fmt.Errorf("stream reference empty")
-	}
-
-	lower := strings.ToLower(trimmed)
-	if lower == "kind" {
-		return c.stream.Kind, nil
-	}
-
-	if strings.HasPrefix(lower, "summary.") {
-		key := strings.TrimSpace(trimmed[len("summary."):])
-		value, ok := caseLookup(c.stream.Summary, key)
-		if !ok {
-			return "", fmt.Errorf("stream summary field %s not found", key)
-		}
-		return formatCaptureValue(value)
-	}
-
-	if strings.HasPrefix(lower, "events[") {
-		inner := trimmed[len("events["):]
-		closeIdx := strings.Index(inner, "]")
-		if closeIdx <= 0 {
-			return "", fmt.Errorf("invalid stream events reference")
-		}
-		count := len(c.stream.Events)
-		if count == 0 {
-			return "", fmt.Errorf("stream events empty")
-		}
-		indexText := strings.TrimSpace(inner[:closeIdx])
-		idx, err := strconv.Atoi(indexText)
-		if err != nil {
-			return "", fmt.Errorf("stream event index %s invalid", indexText)
-		}
-		if idx < 0 {
-			idx = count + idx
-		}
-		if idx < 0 || idx >= count {
-			return "", fmt.Errorf("stream event index %s out of range", indexText)
-		}
-		event := c.stream.Events[idx]
-		remainder := strings.TrimSpace(inner[closeIdx+1:])
-		remainder = strings.TrimPrefix(remainder, ".")
-		remainder = strings.TrimSpace(remainder)
-		if remainder == "" {
-			return formatCaptureValue(event)
-		}
-		value, ok := caseLookup(event, remainder)
-		if !ok {
-			return "", fmt.Errorf("stream event field %s not found", remainder)
-		}
-		return formatCaptureValue(value)
-	}
-
-	return "", fmt.Errorf("unsupported stream reference %q", path)
-}
-
-func (c *captureContext) lookupJSON(path string) string {
-	c.jsonOnce.Do(func() {
-		if strings.TrimSpace(c.body) == "" {
-			c.jsonErr = fmt.Errorf("response body empty")
-			return
-		}
-		var data interface{}
-		if err := json.Unmarshal([]byte(c.body), &data); err != nil {
-			c.jsonErr = err
-			return
-		}
-		c.jsonValue = data
-	})
-	if c.jsonErr != nil {
-		return ""
-	}
-
-	trimmed := strings.TrimSpace(path[len("json"):])
-	if trimmed == "" {
-		return c.body
-	}
-
-	trimmed = strings.TrimPrefix(trimmed, ".")
-	current := c.jsonValue
-	for _, segment := range splitJSONPath(trimmed) {
-		switch typed := current.(type) {
-		case map[string]interface{}:
-			val, ok := typed[segment.name]
-			if !ok {
-				return ""
-			}
-			current = val
-		case []interface{}:
-			if segment.index == nil {
-				return ""
-			}
-			idx := *segment.index
-			if idx < 0 || idx >= len(typed) {
-				return ""
-			}
-			current = typed[idx]
-		default:
-			return ""
-		}
-	}
-	return stringifyJSONValue(current)
-}
-
-type jsonPathSegment struct {
-	name  string
-	index *int
-}
-
-func splitJSONPath(path string) []jsonPathSegment {
-	parts := strings.Split(path, ".")
-	segments := make([]jsonPathSegment, 0, len(parts))
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		segment := jsonPathSegment{}
-		if bracket := strings.Index(part, "["); bracket != -1 {
-			segment.name = part[:bracket]
-			end := strings.Index(part[bracket:], "]")
-			if end > 1 {
-				idxStr := part[bracket+1 : bracket+end]
-				if n, err := strconv.Atoi(idxStr); err == nil {
-					segment.index = &n
-				}
-			}
-		} else {
-			segment.name = part
-		}
-		segments = append(segments, segment)
-	}
-	return segments
-}
-
-func stringifyJSONValue(value interface{}) string {
-	switch v := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return v
-	case bool:
-		return strconv.FormatBool(v)
-	case float64:
-		if float64(int64(v)) == v {
-			return strconv.FormatInt(int64(v), 10)
-		}
-		return strconv.FormatFloat(v, 'f', -1, 64)
-	default:
-		data, err := json.Marshal(v)
-		if err != nil {
-			return fmt.Sprint(v)
-		}
-		return string(data)
-	}
-}
-
-func caseLookup(m map[string]interface{}, key string) (interface{}, bool) {
-	if m == nil {
-		return nil, false
-	}
-	if value, ok := m[key]; ok {
-		return value, true
-	}
-	lower := strings.ToLower(key)
-	for k, v := range m {
-		if strings.ToLower(k) == lower {
-			return v, true
-		}
-	}
-	return nil, false
-}
-
-func formatCaptureValue(value interface{}) (string, error) {
-	if value == nil {
-		return "", nil
-	}
-	switch v := value.(type) {
-	case string:
-		return v, nil
-	case fmt.Stringer:
-		return v.String(), nil
-	case bool:
-		return strconv.FormatBool(v), nil
-	case int, int8, int16, int32, int64:
-		return fmt.Sprintf("%d", v), nil
-	case uint, uint8, uint16, uint32, uint64:
-		return fmt.Sprintf("%d", v), nil
-	case float32, float64:
-		return fmt.Sprintf("%v", v), nil
-	default:
-		data, err := json.Marshal(v)
-		if err != nil {
-			return fmt.Sprint(v), nil
-		}
-		return string(data), nil
-	}
-}
-
-func upsertVariable(
-	list *[]restfile.Variable,
-	scope restfile.VariableScope,
-	name, value string,
-	secret bool,
-) {
-	lower := strings.ToLower(name)
-	vars := *list
-	for i := range vars {
-		if strings.ToLower(vars[i].Name) == lower {
-			vars[i].Value = value
-			vars[i].Scope = scope
-			vars[i].Secret = secret
-			return
-		}
-	}
-	*list = append(vars, restfile.Variable{Name: name, Value: value, Scope: scope, Secret: secret})
 }
 
 func (m *Model) ensureOAuth(
@@ -2529,7 +2179,16 @@ func cloneRequest(req *restfile.Request) *restfile.Request {
 	clone.Metadata.Tags = append([]string(nil), req.Metadata.Tags...)
 	clone.Metadata.Scripts = append([]restfile.ScriptBlock(nil), req.Metadata.Scripts...)
 	clone.Metadata.Uses = append([]restfile.UseSpec(nil), req.Metadata.Uses...)
-	clone.Metadata.Applies = append([]restfile.ApplySpec(nil), req.Metadata.Applies...)
+	if len(req.Metadata.Applies) > 0 {
+		clone.Metadata.Applies = make([]restfile.ApplySpec, len(req.Metadata.Applies))
+		copy(clone.Metadata.Applies, req.Metadata.Applies)
+		for i := range clone.Metadata.Applies {
+			clone.Metadata.Applies[i].Uses = append(
+				[]string(nil),
+				req.Metadata.Applies[i].Uses...,
+			)
+		}
+	}
 	clone.Metadata.Asserts = append([]restfile.AssertSpec(nil), req.Metadata.Asserts...)
 	clone.Metadata.Captures = append([]restfile.CaptureSpec(nil), req.Metadata.Captures...)
 	if req.Metadata.When != nil {

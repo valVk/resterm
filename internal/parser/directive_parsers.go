@@ -2,27 +2,129 @@ package parser
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/unkn0wn-root/resterm/internal/duration"
 	"github.com/unkn0wn-root/resterm/internal/restfile"
+	"github.com/unkn0wn-root/resterm/internal/tracebudget"
+	"github.com/unkn0wn-root/resterm/internal/vars"
 )
 
-func parseApplySpec(rest string, line int) (restfile.ApplySpec, bool) {
-	expr := strings.TrimSpace(rest)
-	if strings.HasPrefix(expr, "=") {
-		expr = strings.TrimSpace(strings.TrimPrefix(expr, "="))
+func parseApplySpec(rest string, line int) (restfile.ApplySpec, error) {
+	raw := strings.TrimSpace(rest)
+	if after, ok := strings.CutPrefix(raw, "="); ok {
+		raw = strings.TrimSpace(after)
 	}
-	if expr == "" {
-		return restfile.ApplySpec{}, false
+	if raw == "" {
+		return restfile.ApplySpec{}, fmt.Errorf("@apply expression missing")
+	}
+	l := strings.ToLower(raw)
+	if strings.HasPrefix(l, "use=") {
+		us, err := parseApplyUses(raw)
+		if err != nil {
+			return restfile.ApplySpec{}, err
+		}
+		return restfile.ApplySpec{
+			Uses: us,
+			Line: line,
+			Col:  1,
+		}, nil
 	}
 	return restfile.ApplySpec{
-		Expression: expr,
+		Expression: raw,
 		Line:       line,
 		Col:        1,
-	}, true
+	}, nil
+}
+
+func parseApplyUses(raw string) ([]string, error) {
+	ps := strings.Split(raw, ",")
+	us := make([]string, 0, len(ps))
+	for _, p := range ps {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return nil, fmt.Errorf("@apply has an empty use token")
+		}
+		k, v, ok := strings.Cut(p, "=")
+		if !ok {
+			return nil, fmt.Errorf("@apply token %q must be use=<name>", p)
+		}
+		if !strings.EqualFold(strings.TrimSpace(k), "use") {
+			return nil, fmt.Errorf("@apply token %q must be use=<name>", p)
+		}
+		n := strings.TrimSpace(trimQuotes(v))
+		if !validPatchName(n) {
+			return nil, fmt.Errorf("@apply use name %q is invalid", n)
+		}
+		us = append(us, n)
+	}
+	if len(us) == 0 {
+		return nil, fmt.Errorf("@apply use= requires at least one profile name")
+	}
+	return us, nil
+}
+
+func parsePatchSpec(rest string, line int) (restfile.PatchProfile, error) {
+	scTok, rem := splitFirst(rest)
+	if scTok == "" {
+		return restfile.PatchProfile{}, fmt.Errorf(
+			"@patch requires '<scope> <name> <expression>'",
+		)
+	}
+	sc, ok := parsePatchScope(scTok)
+	if !ok {
+		return restfile.PatchProfile{}, fmt.Errorf("@patch scope must be file or global")
+	}
+	n, rem := splitFirst(rem)
+	n = strings.TrimSpace(n)
+	if !validPatchName(n) {
+		return restfile.PatchProfile{}, fmt.Errorf("@patch name %q is invalid", n)
+	}
+	ex := strings.TrimSpace(rem)
+	if after, ok := strings.CutPrefix(ex, "="); ok {
+		ex = strings.TrimSpace(after)
+	}
+	if ex == "" {
+		return restfile.PatchProfile{}, fmt.Errorf("@patch %q expression missing", n)
+	}
+	return restfile.PatchProfile{
+		Scope:      sc,
+		Name:       n,
+		Expression: ex,
+		Line:       line,
+		Col:        1,
+	}, nil
+}
+
+func parsePatchScope(tok string) (restfile.PatchScope, bool) {
+	switch strings.ToLower(strings.TrimSpace(tok)) {
+	case "file":
+		return restfile.PatchScopeFile, true
+	case "global":
+		return restfile.PatchScopeGlobal, true
+	default:
+		return 0, false
+	}
+}
+
+func validPatchName(n string) bool {
+	n = strings.TrimSpace(n)
+	if n == "" {
+		return false
+	}
+	for _, r := range n {
+		if isIdentRune(r) {
+			continue
+		}
+		if r == '-' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func parseUseSpec(rest string, line int) (restfile.UseSpec, error) {
@@ -153,9 +255,7 @@ func parseAuthSpec(rest string) *restfile.AuthSpec {
 		if len(fields) < 2 {
 			return nil
 		}
-		for key, value := range parseKeyValuePairs(fields[1:]) {
-			params[key] = value
-		}
+		maps.Copy(params, parseKeyValuePairs(fields[1:]))
 		if params["token_url"] == "" && params["cache_key"] == "" {
 			return nil
 		}
@@ -249,12 +349,12 @@ func parseTraceSpec(rest string) *restfile.TraceSpec {
 		}
 
 		if parts := strings.SplitN(value, "<=", 2); len(parts) == 2 {
-			name := normalizeTracePhaseName(parts[0])
+			name := tracebudget.NormalizePhase(parts[0])
 			dur := parseDuration(parts[1])
-			if dur <= 0 {
+			if name == "" || dur <= 0 {
 				continue
 			}
-			if name == "total" {
+			if name == tracebudget.TotalPhase {
 				spec.Budgets.Total = dur
 				continue
 			}
@@ -286,8 +386,11 @@ func parseTraceSpec(rest string) *restfile.TraceSpec {
 				if dur <= 0 {
 					continue
 				}
-				name := normalizeTracePhaseName(key)
-				if name == "total" {
+				name := tracebudget.NormalizePhase(key)
+				if name == "" {
+					continue
+				}
+				if name == tracebudget.TotalPhase {
 					spec.Budgets.Total = dur
 					continue
 				}
@@ -324,11 +427,20 @@ func parseCompareDirective(rest string) (*restfile.CompareSpec, error) {
 				if val == "" {
 					return nil, fmt.Errorf("@compare baseline cannot be empty")
 				}
+				if vars.IsReservedEnvironment(val) {
+					return nil, fmt.Errorf(
+						"@compare baseline %q is reserved for shared defaults",
+						val,
+					)
+				}
 				baseline = val
 			default:
 				return nil, fmt.Errorf("@compare unsupported option %q", key)
 			}
 			continue
+		}
+		if vars.IsReservedEnvironment(value) {
+			return nil, fmt.Errorf("@compare environment %q is reserved for shared defaults", value)
 		}
 		lowered := strings.ToLower(value)
 		if _, exists := seen[lowered]; exists {
@@ -373,27 +485,4 @@ func parseDuration(value string) time.Duration {
 		return 0
 	}
 	return dur
-}
-
-func normalizeTracePhaseName(name string) string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "dns", "lookup", "name":
-		return "dns"
-	case "connect", "dial":
-		return "connect"
-	case "tls", "handshake":
-		return "tls"
-	case "headers", "request_headers", "req_headers", "header":
-		return "request_headers"
-	case "body", "request_body", "req_body":
-		return "request_body"
-	case "ttfb", "first_byte", "wait":
-		return "ttfb"
-	case "transfer", "download":
-		return "transfer"
-	case "total", "overall":
-		return "total"
-	default:
-		return strings.ToLower(strings.TrimSpace(name))
-	}
 }

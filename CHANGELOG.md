@@ -2,6 +2,89 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+### [0.23.6](https://github.com/unkn0wn-root/resterm/compare/v0.23.5...v0.23.6) (2026-02-26)
+
+
+### Bug Fixes
+
+* **parser:** ignore unknown commented directives outside req so trailing shorthand vars stay file-scoped ([af3c080](https://github.com/unkn0wn-root/resterm/commit/af3c080d7c4d00a9909fa32deb0c99090cdc9346))
+
+### [0.23.5](https://github.com/unkn0wn-root/resterm/compare/v0.23.4...v0.23.5) (2026-02-23)
+
+### [0.23.4](https://github.com/unkn0wn-root/resterm/compare/v0.23.3...v0.23.4) (2026-02-22)
+
+### [0.23.3](https://github.com/unkn0wn-root/resterm/compare/v0.23.2...v0.23.3) (2026-02-20)
+
+### [0.23.2](https://github.com/unkn0wn-root/resterm/compare/v0.23.1...v0.23.2) (2026-02-16)
+
+
+### Features
+
+* add $shared env vars ([87bceae](https://github.com/unkn0wn-root/resterm/commit/87bceae396e92f0477c0bdbbf52a8a7958dca65b))
+* add resterm import/export/pack/unpack collections ([6c87d67](https://github.com/unkn0wn-root/resterm/commit/6c87d6735217631c12226a1d427a7e0c36523dc3))
+* prevent $shared from being used as a concrete env ([0006fcb](https://github.com/unkn0wn-root/resterm/commit/0006fcbf0a267b7557681e78393cb98f7676c32c))
+
+### [0.23.1](https://github.com/unkn0wn-root/resterm/compare/v0.22.0...v0.23.1) (2026-02-15)
+
+
+### Features
+
+* add Kubernetes port-forward support ([b630a46](https://github.com/unkn0wn-root/resterm/commit/b630a463746f4bcd20cc2bc9c21157a0f08caf79))
+
+
+### Bug Fixes
+
+* ci ([aea7a09](https://github.com/unkn0wn-root/resterm/commit/aea7a0993e29c9631a550fb089aa7f4b65d584f9))
+
+## [0.22.0](https://github.com/unkn0wn-root/resterm/compare/v0.21.5...v0.22.0) (2026-02-11)
+
+
+### Features
+
+* **squashed:** sqlite for history ([a8c9d4b](https://github.com/unkn0wn-root/resterm/commit/a8c9d4bd15ec6243e590c63ee49e28313338234f))
+
+
+### Bug Fixes
+
+* **history:** print subcommand help and skip legacy JSON reads after migration ([db6ba1c](https://github.com/unkn0wn-root/resterm/commit/db6ba1cc7913a825f22a0ea4c0b4cc7cd033dd11))
+
+### [0.21.5](https://github.com/unkn0wn-root/resterm/compare/v0.21.4...v0.21.5) (2026-02-09)
+
+
+### Features
+
+* **capture:** add strict mode and better warnings ([b58c0da](https://github.com/unkn0wn-root/resterm/commit/b58c0da313570acbb53312b4add4e2e662b9a2bd))
+* **capture:** support RST expressions and extract capture evaluator ([cf2cb31](https://github.com/unkn0wn-root/resterm/commit/cf2cb31ad3f1793b36a1402d755e0c2b029568ba))
+
+
+### Bug Fixes
+
+* **capture:** avoid false legacy template detection for quoted markers ([5fa6938](https://github.com/unkn0wn-root/resterm/commit/5fa69388110394e6b6ee291e2806675a37cd7cc4))
+* lint ([aa0cf1b](https://github.com/unkn0wn-root/resterm/commit/aa0cf1b73b00c7175c84a973fe507a8dac700865))
+
+### [0.21.4](https://github.com/unkn0wn-root/resterm/compare/v0.21.3...v0.21.4) (2026-02-07)
+
+
+### Features
+
+* add [@patch](https://github.com/patch) profiles and extend [@apply](https://github.com/apply) with use=, auth, settings ([4265b56](https://github.com/unkn0wn-root/resterm/commit/4265b566241ef969805180210ea4cd858978a463))
+
+### [0.21.3](https://github.com/unkn0wn-root/resterm/compare/v0.21.2...v0.21.3) (2026-02-05)
+
+### [0.21.2](https://github.com/unkn0wn-root/resterm/compare/v0.21.1...v0.21.2) (2026-02-02)
+
+
+### Features
+
+* add brew detect to resterm update ([2090caf](https://github.com/unkn0wn-root/resterm/commit/2090cafcb2b652de0107043d7ca53ff58aa99ed6))
+* add resterm init cmd ([7388603](https://github.com/unkn0wn-root/resterm/commit/73886035c62aeaa37ee68f4f2898b775c289c51f))
+
+
+### Bug Fixes
+
+* golci ([10e9440](https://github.com/unkn0wn-root/resterm/commit/10e9440a4a93a74df816289886b8d44b3268381a))
+* resterm placeholder on startup ([9970a9d](https://github.com/unkn0wn-root/resterm/commit/9970a9d27e9a3a0ca34c1a28cb2d6b9b25780635))
+
 ### [0.21.1](https://github.com/unkn0wn-root/resterm/compare/v0.20.3...v0.21.1) (2026-01-30)
 
 

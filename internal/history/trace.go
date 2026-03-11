@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/unkn0wn-root/resterm/internal/nettrace"
-	"github.com/unkn0wn-root/resterm/internal/traceutil"
+	"github.com/unkn0wn-root/resterm/internal/tracebudget"
 )
 
 type TraceSummary struct {
@@ -48,6 +48,7 @@ type TraceConn struct {
 	Proxy         string        `json:"proxy,omitempty"`
 	ProxyTunnel   bool          `json:"proxyTunnel,omitempty"`
 	SSH           string        `json:"ssh,omitempty"`
+	K8s           string        `json:"k8s,omitempty"`
 	Protocol      string        `json:"protocol,omitempty"`
 }
 
@@ -116,7 +117,7 @@ func NewTraceSummary(tl *nettrace.Timeline, rep *nettrace.Report) *TraceSummary 
 
 	if rep != nil {
 		budget := rep.Budget.Clone()
-		if traceutil.HasBudget(budget) {
+		if tracebudget.HasBudget(budget) {
 			bud := &TraceBudget{Total: budget.Total, Tolerance: budget.Tolerance}
 			if len(budget.Phases) > 0 {
 				phases := make(map[string]time.Duration, len(budget.Phases))
@@ -302,6 +303,7 @@ func connFromTimeline(c *nettrace.ConnDetails) *TraceConn {
 		Proxy:         c.Proxy,
 		ProxyTunnel:   c.ProxyTunnel,
 		SSH:           c.SSH,
+		K8s:           c.K8s,
 		Protocol:      c.Protocol,
 	}
 }
@@ -355,6 +357,7 @@ func connToTimeline(c *TraceConn) *nettrace.ConnDetails {
 		Proxy:         c.Proxy,
 		ProxyTunnel:   c.ProxyTunnel,
 		SSH:           c.SSH,
+		K8s:           c.K8s,
 		Protocol:      c.Protocol,
 	}
 }

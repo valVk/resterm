@@ -3,6 +3,7 @@
 ## Index
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [Initializing a Project](#initializing-a-project)
 - [UI Tour](#ui-tour)
 - [Workspaces & Files](#workspaces--files)
 - [Variables and Environments](#variables-and-environments)
@@ -15,7 +16,9 @@
 - [Scripting API](#scripting-api)
 - [Authentication](#authentication)
 - [SSH Tunnels](#ssh-tunnels)
+- [Kubernetes Port-Forwards](#kubernetes-port-forwards)
 - [HTTP Transport & Settings](#http-transport--settings)
+- [Collection Sharing](#collection-sharing)
 - [Response History & Diffing](#response-history--diffing)
 - [CLI Reference](#cli-reference)
 - [Configuration](#configuration)
@@ -67,6 +70,55 @@ Content-Type: application/json
   "note": "created from Resterm"
 }
 ```
+
+---
+
+## Initializing a Project
+
+The `resterm init` command creates a starter set of files in a directory so you can begin working with requests immediately.
+
+```bash
+mkdir my-api && cd my-api
+resterm init
+```
+
+This writes files based on the selected template. Two templates are available:
+
+| Template | Files created |
+| --- | --- |
+| `standard` (default) | `requests.http`, `resterm.env.json`, `resterm.env.example.json`, `rts/helpers.rts`, `RESTERM.md` |
+| `minimal` | `requests.http`, `resterm.env.json` |
+
+Both templates add `resterm.env.json` to `.gitignore` so secrets stay out of version control. If you prefer to manage `.gitignore` yourself, pass `--no-gitignore`.
+
+### Flags
+
+| Flag | Description |
+| --- | --- |
+| `-dir <path>` | Target directory. You can also pass the path as a positional argument. |
+| `-template <name>` | Template to use (`standard` or `minimal`). |
+| `-force` | Overwrite existing files instead of aborting. |
+| `-dry-run` | Print actions without writing anything. |
+| `-no-gitignore` | Skip updating `.gitignore`. |
+| `-list` | Print available templates and exit. |
+
+### Examples
+
+```bash
+# Create files in a subdirectory
+resterm init ./api-tests
+
+# Use the minimal template
+resterm init --template minimal
+
+# Preview what would be created
+resterm init --dry-run
+
+# Overwrite existing files
+resterm init --force
+```
+
+Once the files exist, run `resterm` in the same directory to open the workspace. Press `Ctrl+E` to switch between the `dev` and `prod` environments defined in `resterm.env.json`.
 
 ---
 
@@ -285,6 +337,28 @@ Example environment (`_examples/resterm.env.json`):
 
 Switch environments with `Ctrl+E`. If multiple environments exist, Resterm defaults to `dev`, `default`, or `local` when available.
 
+#### Shared variables (`$shared`)
+
+Use the reserved `$shared` key to define variables that apply to **all** environments. This avoids duplicating common values (auth credentials, token URLs, etc.) across every environment. Environment-specific values override `$shared` when names collide.
+
+```json
+{
+  "$shared": {
+    "api": { "version": "v2" },
+    "auth": { "clientId": "demo-client" }
+  },
+  "dev": {
+    "base": { "url": "https://dev.example.com" }
+  },
+  "prod": {
+    "base": { "url": "https://prod.example.com" },
+    "auth": { "clientId": "prod-client" }
+  }
+}
+```
+
+In this example `dev` inherits `auth.clientId=demo-client` from `$shared`, while `prod` overrides it with `prod-client`. Both environments receive `api.version=v2`. The `$shared` key itself never appears in the environment selector.
+
 #### Dotenv files via `--env-file`
 
 Prefer JSON for multi-environment bundles, but you can point Resterm at a dotenv file when you only need a single workspace:
@@ -426,6 +500,94 @@ If `SSH_AUTH_SOCK` is set, the SSH agent is also used by default.
 
 ---
 
+## Kubernetes Port-Forwards
+
+Use `@k8s` to route HTTP/gRPC/WebSocket/SSE traffic through a Kubernetes API port-forward managed by Resterm.
+
+**Syntax:** `# @k8s [scope] [name] key=value ...`
+
+- **TL;DR**:
+  - Define a reusable profile: `# @k8s global cluster-api namespace=default service=api port=http context=dev persist`
+  - Use it in a request: `# @k8s use=cluster-api`
+  - Inline one-off: `# @k8s deployment=payments port=https container=api`
+
+- `scope`: `global`, `file`, or `request` (default request). Global/file scopes define reusable profiles. Requests either reference a profile with `use=` or define inline options.
+- `name`: profile tag (default `default`).
+- Target fields:
+  - `target=` accepts `pod:<name>`, `service:<name>`, `deployment:<name>`, `statefulset:<name>`.
+  - Aliases: `pod=`, `service=` (`svc=`), `deployment=` (`deploy=`), `statefulset=` (`sts=`).
+  - Exactly one target is allowed.
+- Transport fields: `namespace` (`ns`), `port` (number or named port), `container`, `local_port`, `address`, `pod_running_timeout`, `retries`, `persist` (only honored for global/file), `context`, `kubeconfig`, `use`.
+- Values expand templates and support `env:VAR` to prefer terminal env vars before other scopes.
+- `use=` resolves file-scoped profile first, then globals.
+- Request-level `persist` is ignored to avoid leaking background forwarders.
+- `@ssh` and `@k8s` are mutually exclusive on a request.
+
+Scopes:
+
+- **Global** (workspace-wide): `# @k8s global cluster namespace=default service=api port=http context=kind-dev persist`
+- **File** (only this `.http`): `# @k8s file edge namespace=payments deployment=api port=https`
+- **Request inline** (scope keyword optional because request is default): `# @k8s service=catalog port=http`
+- **Reference** a profile: `# @k8s use=cluster`
+
+Examples:
+
+```http
+# @k8s global cluster-api namespace=default service=api port=http context=kind-dev persist retries=2
+
+### API through service
+# @k8s use=cluster-api
+GET http://api.default.svc.cluster.local/v1/health
+```
+
+Named port with deployment target:
+
+```http
+### Deployment target
+# @k8s deployment=payments-api port=https container=api pod_running_timeout=30s
+POST https://payments.internal/v1/charge
+Content-Type: application/json
+
+{"amount": 100}
+```
+
+gRPC over Kubernetes port-forward:
+
+```http
+# @k8s namespace=default pod=grpc-api-0 port=grpc
+# @grpc testservices.inventory.ProjectService/Seed
+# @grpc-descriptor ./proto/inventory.protoset
+GRPC passthrough:///grpc-api.default.svc.cluster.local:8082
+
+{}
+```
+
+How target resolution works:
+
+- `pod`: forwards to that pod directly.
+- `service`: resolves service selectors and chooses a deterministic pod (running/ready preferred, then by name).
+- `deployment` / `statefulset`: resolves selectors from the workload and picks a deterministic pod with the same policy.
+- For named ports:
+  - pod/workload targets resolve against container ports (`container` can disambiguate).
+  - service targets resolve service port or targetPort, then map to container port when needed.
+
+Authentication and authorization:
+
+- Resterm uses `client-go` kubeconfig loading (`$KUBECONFIG`/default config, optional `kubeconfig=` override).
+- `context=` selects a kube context explicitly.
+- Cluster auth plugins and exec credentials follow your kubeconfig with Resterm's configured exec policy.
+- RBAC still applies. You need permission to read target resources/pods and open pod port-forward sessions in the namespace.
+
+Troubleshooting:
+
+- `k8s target ... has no running pods`: check selectors, pod readiness, and namespace.
+- `does not expose named port`: verify container/service port names and set `container=` if multiple containers export the same name.
+- `service ... has no selector`: selector-less services cannot auto-resolve pods.
+- Use a higher `pod_running_timeout` when pods are still starting.
+- For release hardening, use `docs/k8s-release-checklist.md`.
+
+---
+
 ## Request File Anatomy
 
 ### Separators and comments
@@ -457,7 +619,9 @@ RestermScript (RST) powers templates (`{{= ... }}`) and directive expressions. I
 | Directive | Syntax | Description |
 | --- | --- | --- |
 | `@use` | `# @use ./rts/helpers.rts [as helpers]` | Import an RST module (valid at file or request scope); the alias defaults to the module name. |
-| `@apply` | `# @apply {headers: {"X-Test": "1"}}` | Apply a patch to method/url/headers/query/body/vars before pre-request scripts. |
+| `@patch` | `# @patch file jsonApi {headers: {"Accept":"application/json"}}` | Define reusable `@apply` patch profiles at `file` or `global` scope. |
+| `@apply` | `# @apply {headers: {"X-Test": "1"}}` | Apply an inline patch to method/url/headers/query/body/auth/settings/vars before pre-request scripts. |
+| `@apply` | `# @apply use=jsonApi,use=authProd` | Reuse named `@patch` profiles; entries run left-to-right and resolve file scope first, then globals. |
 | `@when` | `# @when vars.has("token")` | Run the request only when the expression is truthy. |
 | `@skip-if` | `# @skip-if env.mode == "dry-run"` | Skip the request when the expression is truthy. |
 | `@assert` | `# @assert response.statusCode == 200` | Evaluate an assertion after the response arrives. |
@@ -523,6 +687,8 @@ Accept: application/json
 | File | `# @file upload.root https://storage.example.com` / `# @file-secret upload.root ...` / `# @var file upload.root ...` | Visible to all requests in the same document only. |
 | Request | `# @request trace.id {{$uuid}}` / `# @request-secret trace.id ...` / `# @var request trace.id ...` | Visible only to the current request (useful for tests). |
 
+Values are taken verbatim which means that quotes are not special, so `# @file greeting "hello world"` stores the quotes as part of the value. If you need spaces, just write them directly: `# @file greeting hello world`.
+
 You can also use shorthand assignments outside comment blocks: `@requestId = {{$uuid}}`. Shorthand defaults to request scope while you're inside a request block and to file scope elsewhere; add a prefix to override (`@global api.token abc`, `@request trace.id {{$uuid}}`, or `@file base.url https://example.com`).
 
 Append `-secret` (`global-secret`, `file-secret`, `request-secret`) to mask stored values in summaries; this works for both comment directives and shorthand lines (`@global-secret token xyz`, `@file-secret base.url ...`, `@request-secret trace.id ...`).
@@ -533,23 +699,30 @@ Append `-secret` (`global-secret`, `file-secret`, `request-secret`) to mask stor
 
 Expressions can reference:
 
-- `{{response.status}}`, `{{response.statuscode}}`
-- `{{response.body}}`
-- `{{response.headers.<Header-Name>}}`
-- `{{response.json.path}}` (dot/bracket navigation into JSON)
-- `{{stream.kind}}`, `{{stream.summary.sentCount}}`, `{{stream.events[0].text}}` for streaming transcripts (available when the request used `@sse` or `@websocket`)
-- Any template variables resolvable by the current stack
+- `response.statusCode`, `response.statusText`, `response.text()`
+- `response.headers["Header-Name"]` or `response.header("Header-Name")`
+- `response.json.path` shorthand (equivalent to `response.json().path`)
+- `stream.kind()`, `stream.summary().sentCount`, `stream.events()[0].text` for streaming transcripts (available when the request used `@sse` or `@websocket`)
+- `vars.*`, `env.*`, `last.*`, imported `@use` modules, and other RestermScript helpers
 
 Example:
 
 ```http
 ### Seed session
 # @name AnalyticsSeedSession
-# @capture global-secret analytics.sessionToken {{response.json.json.sessionToken}}
-# @capture file analytics.lastJobId {{response.json.json.jobId}}
-# @capture request analytics.trace {{response.json.headers.X-Amzn-Trace-Id}}
+# @capture global-secret analytics.sessionToken = response.json.sessionToken
+# @capture file analytics.lastJobId = response.json.jobId
+# @capture request analytics.trace = response.headers["x-amzn-trace-id"]
 POST https://httpbin.org/anything/analytics/sessions
 ```
+
+Template captures such as `{{response.json.token}}` remain supported and can be used alongside RTS capture expressions.
+
+Set `# @setting capture.strict true` to make capture-path misses fail instead of silently resolving to an empty string.
+
+Do not mix unquoted template markers and RTS call syntax in the same capture expression (for example `contains({{name}}, "x")`). Use pure RTS (`contains(vars.get("name") ?? "", "x")`) or a template expression (`{{= contains(...) }}`).
+
+`capture.strict` is the canonical key. `capture-strict` and `capture_strict` are accepted for compatibility. When multiple aliases are present, precedence is `capture.strict` > `capture-strict` > `capture_strict`.
 
 ### Body content
 
@@ -757,6 +930,40 @@ Add `# @script pre-request` or `# @script test` followed by lines that start wit
 > request.setBody(JSON.stringify({ scope: "reports" }, null, 2));
 ```
 
+You can also use a brace block (`{% ... %}`) to avoid prefixing every line with `>`.
+
+```http
+# @script test
+> {%
+client.test("status ok", function () {
+  tests.assert(response.statusCode === 200, "status code");
+});
+%}
+```
+
+Lines inside the block don't need `>` (but a leading `>` is still stripped if present).
+The `{% ... %}` block is only for inline script content. Script file includes must be written as their own `> < ./path.js` line outside the block.
+
+Allowed example:
+
+```http
+# @script test
+> < ./scripts/pre.js
+> {%
+client.test("ok", function () {});
+%}
+```
+
+Disallowed example:
+
+```http
+# @script test
+> {%
+> < ./scripts/pre.js
+client.test("ok", function () {});
+%}
+```
+
 Reference external scripts with `> < ./scripts/pre.js`.
 
 See [Scripting API](#scripting-api) for available helpers.
@@ -931,7 +1138,7 @@ Capture values at runtime and reuse them in subsequent requests:
 
 ```http
 ### Login
-# @capture global-secret auth.token {{response.json.token}}
+# @capture global-secret auth.token = response.json.token
 POST {{base.url}}/login
 
 {
@@ -1050,7 +1257,9 @@ When `header` is set to something other than `Authorization`, Resterm injects ju
 - Requests inherit a shared cookie jar; cookies persist across sessions.
 - TLS per request: `# @settings http-root-cas=a.pem http-client-cert=cert.pem http-client-key=key.pem http-insecure=true` for a single line, or `@setting key value` per line (`http-root-cas` accepts space/comma/semicolon separated lists; paths are relative). GraphQL/REST/WebSocket/SSE all share these HTTP settings.
 - Use `@no-log` to omit sensitive bodies from history snapshots.
-- History is stored in `${RESTERM_CONFIG_DIR}/history.json` (defaults to the platform config directory) and retains up to ~500 entries. Set `RESTERM_CONFIG_DIR` to relocate it.
+- History is stored in `${RESTERM_CONFIG_DIR}/history.db` (defaults to the platform config directory) and has no fixed entry cap. Set `RESTERM_CONFIG_DIR` to relocate it.
+- On first launch after upgrading, Resterm imports `${RESTERM_CONFIG_DIR}/history.json` into `history.db` automatically when present.
+- If the SQLite history file is detected as corrupted, Resterm quarantines it to `history.db.corrupt-<timestamp>` and initializes a fresh `history.db`.
 - Custom root CAs replace system roots by default (strict). Set `http-root-mode append` or `grpc-root-mode append` if you want to keep system roots in addition to your own.
 - File-level defaults: place `# @setting key value` or `# @settings key1=val1 ...` before the first request to apply to all requests in that file. Request-level overrides still win.
 - Settings are generic. Today the recognized prefixes are transport/TLS (`http-*`, `grpc-*`, `timeout`, `proxy`, `followredirects`, `insecure`). Future features can add more prefixes; unknown keys are ignored for now to stay forward-compatible.
@@ -1062,6 +1271,96 @@ Body helpers:
 - `< path` loads file contents as the body.
 - `@ path` inside the body injects file contents inline.
 - GraphQL payloads are normalized automatically.
+
+---
+
+## Collection Sharing
+
+Resterm can export a portable, self-contained collection bundle that you can commit to Git and import anywhere else. This is useful when you want a reliable "same inputs, same requests" handoff between developers, CI jobs, or support environments.
+
+A bundle export contains your request files plus the files those requests depend on, such as RTS modules, script includes, payload files, GraphQL query/variables files, gRPC descriptor/message files, and WebSocket `send-file` payloads. Resterm writes a `manifest.json` file with per-file checksums, and import verifies those checksums before writing to disk.
+
+### What happens to environment files
+
+Resterm treats environment sharing as an explicit safe template flow:
+
+1. If `resterm.env.example.json` exists in the workspace, Resterm exports it exactly as written.
+2. If only `resterm.env.json` or `rest-client.env.json` exists, Resterm generates `resterm.env.example.json` and replaces every value with `REPLACE_ME`.
+3. If no environment file exists, Resterm still writes an empty `resterm.env.example.json` so the bundle shape remains predictable.
+
+### Export a collection bundle
+
+The following command exports recursively and names the bundle:
+
+```bash
+resterm collection export \
+  --workspace ./my-api \
+  --out ./shared/my-api-bundle \
+  --recursive \
+  --name "my-api-v1"
+```
+
+A typical bundle directory looks like this:
+
+```text
+shared/my-api-bundle/
+  manifest.json
+  requests.http
+  rts/helpers.rts
+  payloads/create-user.json
+  resterm.env.example.json
+```
+
+You can commit this directory directly to Git and open it in code review like any other project files.
+
+### Import a collection bundle
+
+You can import that bundle into a local workspace with:
+
+```bash
+resterm collection import \
+  --in ./shared/my-api-bundle \
+  --workspace ./my-local-api
+```
+
+If you want to inspect the plan before writing, run:
+
+```bash
+resterm collection import \
+  --in ./shared/my-api-bundle \
+  --workspace ./my-local-api \
+  --dry-run
+```
+
+If destination files already exist and replacement is intentional, you can add `--force`.
+
+### Pack a bundle into a zip archive
+
+If you want to hand off a single file instead of a directory, you can pack an existing bundle:
+
+```bash
+resterm collection pack \
+  --in ./shared/my-api-bundle \
+  --out ./shared/my-api-bundle.zip
+```
+
+This command reads and validates the bundle manifest and payload checksums before writing the archive, so you do not package a partially corrupted bundle by accident.
+
+### Unpack a zip archive back into a bundle directory
+
+You can unpack the archive before importing it:
+
+```bash
+resterm collection unpack \
+  --in ./shared/my-api-bundle.zip \
+  --out ./shared/my-api-bundle
+```
+
+Unpack validates archive paths, rejects unsafe entries (for example traversal paths and symlinks), validates checksums against `manifest.json`, and only then moves the unpacked bundle into place.
+
+### Safety and validation behavior
+
+Export, import, pack, and unpack all enforce path safety and integrity checks. Resterm rejects references that escape the workspace, rejects malicious traversal paths in manifests and archives, rejects symlink escapes, and fails operations if size or checksum validation does not match the manifest.
 
 ---
 
@@ -1077,7 +1376,23 @@ Body helpers:
 
 ## CLI Reference
 
-Run `resterm --help` for the latest list. Core flags:
+Run `resterm --help` for the latest list.
+
+### Subcommands
+
+**`resterm init [dir]`** - Bootstrap a new project with starter files. See [Initializing a Project](#initializing-a-project) for details.
+**`resterm collection export --workspace <dir> --out <dir> [--name <name>] [--recursive] [--force]`** - Export a Git-friendly collection bundle directory.
+**`resterm collection import --in <dir> --workspace <dir> [--force] [--dry-run]`** - Import a collection bundle into a workspace.
+**`resterm collection pack --in <dir> --out <file.zip> [--force]`** - Pack a bundle directory into a zip archive.
+**`resterm collection unpack --in <file.zip> --out <dir> [--force]`** - Unpack and validate a bundle archive into a directory.
+**`resterm history export --out <path>`** - Export persisted history to JSON.
+**`resterm history import --in <path>`** - Import history entries from a JSON export.
+**`resterm history backup --out <path>`** - Create a SQLite-consistent backup copy of `history.db`.
+**`resterm history stats`** - Print schema version, row counts, and file sizes.
+**`resterm history check [--full]`** - Run SQLite integrity checks on history storage.
+**`resterm history compact`** - Run WAL checkpoint + VACUUM to compact `history.db`.
+
+### Core flags
 
 | Flag | Description |
 | --- | --- |
@@ -1099,6 +1414,54 @@ Run `resterm --help` for the latest list. Core flags:
 | `--openapi-resolve-refs` | Resolve external `$ref` pointers before generation. |
 | `--openapi-include-deprecated` | Keep deprecated operations that are skipped by default. |
 | `--openapi-server-index <n>` | Choose which server entry (0-based) seeds the base URL. |
+
+### Collection export, import, pack, and unpack
+
+Use collection export/import when you want teammates to reproduce a request workspace without hand-copying dependencies. Use pack/unpack when you need a single archive file for transfer.
+
+```bash
+resterm collection export --workspace ./my-api --out ./shared/my-api-bundle --recursive
+resterm collection import --in ./shared/my-api-bundle --workspace ./my-local-api
+resterm collection pack --in ./shared/my-api-bundle --out ./shared/my-api-bundle.zip
+resterm collection unpack --in ./shared/my-api-bundle.zip --out ./shared/my-api-bundle
+```
+
+Export command flags:
+
+| Flag | Description |
+| --- | --- |
+| `--workspace <dir>` | Source workspace directory to scan. |
+| `--out <dir>` | Destination bundle directory to create. |
+| `--name <name>` | Optional bundle name stored in the manifest. |
+| `--recursive` | Recursively scan workspace for request files before dependency resolution. |
+| `--force` | Replace an existing output directory. |
+
+Import command flags:
+
+| Flag | Description |
+| --- | --- |
+| `--in <dir>` | Source bundle directory containing `manifest.json`. |
+| `--workspace <dir>` | Destination workspace directory to write files into. |
+| `--dry-run` | Validate and print planned operations without writing files. |
+| `--force` | Overwrite existing destination files. |
+
+Pack command flags:
+
+| Flag | Description |
+| --- | --- |
+| `--in <dir>` | Source bundle directory containing `manifest.json`. |
+| `--out <file.zip>` | Destination archive path to create. |
+| `--force` | Replace an existing archive file. |
+
+Unpack command flags:
+
+| Flag | Description |
+| --- | --- |
+| `--in <file.zip>` | Source archive file created by `collection pack`. |
+| `--out <dir>` | Destination bundle directory to create. |
+| `--force` | Replace an existing output directory. |
+
+The exporter includes referenced helper files automatically and always emits `resterm.env.example.json` in the bundle. Import validates checksums before writing files and rejects unsafe paths. Pack and unpack apply the same manifest and path safety guarantees so archive handoffs behave the same as directory handoffs.
 
 ### Importing curl commands
 
@@ -1133,14 +1496,14 @@ resterm \
 - `openapi-test.yml` in the repository is a comprehensive spec that exercises callbacks, complex query styles, and mixed security schemes—perfect for smoke-testing the converter.
 
 > [!NOTE]
-> Resterm's converter is powered by [`kin-openapi`](https://github.com/getkin/kin-openapi), which currently validates OpenAPI documents up to **v3.0.1**. Work on v3.1 support is ongoing progress in [getkin/kin-openapi#1102](https://github.com/getkin/kin-openapi/pull/1102).
+> Resterm's converter is powered by [`libopenapi`](https://github.com/pb33f/libopenapi) and supports OpenAPI **v3.0**, **v3.1**, and **v3.2** inputs.
 
 ---
 
 ## Configuration
 
 - Config directory: `$HOME/Library/Application Support/resterm` (macOS), `%APPDATA%\resterm` (Windows), or `$HOME/.config/resterm` (Linux/Unix). Override with `RESTERM_CONFIG_DIR`.
-- History file: `<config-dir>/history.json` (max ~500 entries by default).
+- History file: `<config-dir>/history.db` (no fixed entry limit).
 - Settings file: `<config-dir>/settings.toml` (created when you first change preferences such as the default theme).
 - Theme directory: `<config-dir>/themes/` (override with `RESTERM_THEMES_DIR`). Drop `.toml` or `.json` files here to make them available in the selector.
 - Runtime globals and file captures are scoped per environment and document; they are released when you clear globals or switch environments.
@@ -1230,6 +1593,7 @@ Explore `_examples/` for ready-to-run:
 - `scripts.http` - pre-request and test scripting patterns.
 - `graphql.http` - inline and file-based GraphQL requests.
 - `grpc.http` - gRPC reflection and descriptor usage.
+- `k8s.http` - Kubernetes profile scopes, non-pod targets, named ports, and gRPC over `@k8s`.
 - `oauth2.http` - manual capture vs using the `@auth oauth2` directive.
 - `transport.http` - timeout, proxy, and `@no-log` samples.
 - `compare.http` - demonstrates `@compare` directives and CLI-triggered multi-environment sweeps.
